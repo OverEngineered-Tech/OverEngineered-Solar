@@ -1,8 +1,23 @@
 # OverEngineered Solar
 
-A home-screen widget for the Scriptable app on iPhone, for use with Enphase® solar systems.
+A Home Screen widget for the Scriptable app on iPhone, for use with Enphase® solar systems.
 
-Guide version 2026.10.05.2013. Written for widget 2026.10.05.1740 and setup 2026.10.05.1740.
+<img src="images/widget.png" alt="The OverEngineered Solar widget" width="520">
+
+## What this adds to the Enphase app
+
+- **On your Home Screen.** No app to open and wait for. The numbers are just there.
+- **On your Lock Screen too.** Today's production, peak and net, without unlocking your phone.
+- **Hardware fault warning.** Checks once a day for a failed microinverter or meter, so you don't have to look through each panel.
+- **A full day, always.** The last 24 hours, not since midnight, so the morning isn't blank.
+- **Good day or bad day.** Every number is green or orange against your own last 30 days.
+- **Yesterday and today on one curve.** Watch today's power build right next to yesterday's.
+- **Banked kWh estimate.** A running estimate of your bank between bills, and which way it's heading.
+- **Dirty panel warning.** Tells you when the panels might need washing.
+
+For live power, per-panel detail and long-term history, tap the widget to open the Enphase app.
+
+Guide version 2026.10.12.1620. Written for widget 2026.10.12.1613, setup 2026.10.12.0749 and dev sandbox 2026.10.12.1617.
 
 **Everything here runs on your iPhone, inside the Scriptable app.** A computer is only useful for reading this guide and, if you like, creating the Enphase developer account.
 
@@ -14,34 +29,29 @@ Licensed under the PolyForm Noncommercial License 1.0.0. Personal and other nonc
 
 ## What it shows
 
-```
- ☀  OverEngineered Solar                    Oct 3, 2:30 PM
- Past 24 Hours                │  Past 30 Days
-   146 Prod    137 Cons       │    112 kWh/d   [trend line]
- ─────────────────────────────┼─────────────────────────────
- Banked Credits ▲             │  Array Status
-   5364    9 Net              │    24.5 kW     [power curve]
-                              │    Max Power
-```
+**Title row.** A weather icon for your location, your title, and the time of the newest data, which tells you how fresh the numbers are. The time turns orange if the last update failed, or in daylight if the newest reading is more than 2 hours old. When the array is running near its peak the icon is a bright sun, whatever the forecast says.
 
-**Title row.** A weather icon for your location, your title, and the time of the newest data, which tells you how fresh the numbers are. The time turns orange if the last update failed.
-
-**Past 24 Hours.** Production and consumption over the last 24 hours, in kWh. This is a rolling window ending now, not "since midnight", so on two similar days the numbers stay steady.
+**Past 24 Hours.** Production and consumption over the last 24 hours, in kWh. This is a rolling window ending now, not "since midnight", so on two similar days the numbers stay steady. Numbers under 10 show one decimal.
 - Prod is green when it is at or above your 30-day average production, orange when below.
 - Cons is green when it is at or below your 30-day average consumption, orange when above.
+- With "Show Exported / Imported" switched on in setup, Cons is replaced by two smaller numbers: **Exp**, the energy you sent to the grid, and **Imp**, the energy you took from it. They are worked out by comparing production and consumption every 15 minutes, so they read a little lower than your utility's meter. They need consumption meters, and with a home battery they are not your grid numbers, because the battery sits in between.
 
-**Past 30 Days.** Your average daily production over the last 30 days, with a 30-day trend line. Green means you are producing at least as much as you use, on average.
+**30-Day Avg Prod.** Your average daily production over the last 30 days, with a 30-day trend line. Green means you are producing at least as much as you use, on average.
 
 **Banked Credits.** Your running net-metering balance in kWh: the balance from your last bill, plus everything produced minus everything consumed since then.
 - The small mark after the label shows which way the bank has been heading over the last 28 days: a green up triangle (adding more than about 5 kWh a day), an orange down triangle (drawing down more than about 5 kWh a day), or a grey dash (roughly flat).
 - "Net" is production minus consumption for the same rolling 24 hours shown at the top left.
+- The balance keeps moving day and night. What the house uses overnight comes off it as the night goes on, not all at once after sunrise.
 - If the estimate goes below zero the label reads "Credit Deficit".
+- Your utility's meter is the one you're billed on, so the bill is the true number. Enphase's meters can differ from it by about 2% of a month's usage. If you go back into setup and update your bank balance from your bill periodically, it will track pretty closely.
+- With a home battery, some energy is lost passing through it, so this number and Net read a little high.
+- If your utility does not bank kWh one for one (net billing, such as California NEM 3), switch off "My utility banks kWh credits" in setup. The box is then labelled "Net Since" with your chosen date, and shows production minus consumption since that day.
 
 **Array Status.** A health check and a chart.
 - The chart is the last 24 hours of production. The right end is your current power. The dashed line marks the highest reading in the last hour.
-- The number is your array's peak power across the last five clear days. The label under it is a verdict: **Max Power** (normal), **Dirty** or **Very Dirty** (clear-day peaks have dropped; the panels may need washing), **Winter Sun** (the sun is too low to judge, so the number holds its last real value until spring), or **Service Req** (Enphase is reporting a hardware fault).
+- The number is your array's peak power across the last five clear days. The label under it compares that peak to what your array should put out on a clear day, as a read on how clean the panels are: **Max Power** (as expected), **Dirty** or **Very Dirty** (the peak has dropped; the panels may need washing), **Winter Sun** (the sun is too low to judge, so the number holds its last real value until spring), or **Service Req** (Enphase is reporting a hardware fault).
 
-Tap the widget to open the Enphase app (see "The tap shortcut" below).
+Tap the widget to open the Enphase app. Scriptable shows for a moment on the way; that is how iOS handles a widget tap.
 
 ## What you need
 
@@ -53,7 +63,7 @@ Consumption monitoring is optional. Without it, setup asks for a daily usage est
 
 ## Install
 
-[Scriptable](https://scriptable.app) is a free iPhone app that runs small scripts and can show one as a home-screen widget. This widget is two of those scripts: one you run once to set things up, and one that draws the widget.
+[Scriptable](https://scriptable.app) is a free iPhone app that runs small scripts and can show one as a Home Screen widget. This widget is two of those scripts: one you run once to set things up, and one that draws the widget.
 
 **Recommended: print the [printable guide](https://overengineered-tech.github.io/OverEngineered-Solar/Printable-Guide-OverEngineered-Solar.pdf) before you start.** The link opens the guide as a PDF you can print or save. It has every step and picture on paper, so you can follow along while your phone is busy with the install.
 
@@ -69,7 +79,7 @@ Do all of this on your iPhone. The scripts have to be in Scriptable on the phone
 5. Back in the script list, press and hold the new **Untitled Script**, tap **Rename**, and call it **OverEngineered Solar Setup**.
 6. Go back to GitHub and do the same with `widget-overengineered-solar.js`: copy it, paste it into a new script, tap **Done**, then rename that one **OverEngineered Solar**.
 7. In Scriptable, tap **OverEngineered Solar Setup** to run it (next section).
-8. When setup is finished, add a medium Scriptable widget to your home screen, long-press it, choose **Edit Widget**, and pick **OverEngineered Solar** as the script.
+8. When setup is finished, add a Scriptable widget to your Home Screen, long-press it, choose **Edit Widget**, and pick **OverEngineered Solar** as the script.
 
 The script names are suggestions. Any names work, as long as you can tell the two apart.
 
@@ -88,8 +98,8 @@ In Scriptable, tap **OverEngineered Solar Setup** in the script list to run it. 
 
    ![sign up](images/2-sign-up.png)
 
-4. Enphase emails you an activation link. It comes from api@enphaseenergy.com with a subject starting “Action Required”; check spam if you don't see it. Tap the link. It opens a sign-in page. (A second tap says “already activated”, which is fine.)
-5. Sign in. On the welcome page tap **Applications** in the menu at the top, not the big Quick Start button.
+4. Enphase emails you an activation link. It comes from api@enphaseenergy.com with a subject starting “Action Required”; check spam if you don't see it. Tap the link. It opens in Safari and only confirms your account. (A second tap says “already activated”, which is fine.)
+5. **Go back to Scriptable** and sign in there, on the page setup opened. Setup can only read your keys from that page, not from Safari. On the welcome page tap **Applications** in the menu at the top, not the big Quick Start button.
 
    ![after sign in](images/3-after-sign-in.png)
 
@@ -106,34 +116,53 @@ In Scriptable, tap **OverEngineered Solar Setup** in the script list to run it. 
 
    ![your keys](images/6-your-keys.png)
 
-10. Tap the ✕ at the top left. Setup reads the three keys for you. (You can also type them in.)
+10. Tap **Close** at the top left. Setup reads the three keys for you. (You can also type them in.)
 
 *Optional: the Enphase developer site is easier on a bigger screen. You can create the developer account and the application on a computer if you prefer. You still run setup on your iPhone afterwards and sign in there, and it reads the keys the same way.*
 
-**2. Approve access.** Tap "Continue to Enphase login", log in with your normal Enphase account (not the developer one), tap Authorize, then tap the ✕. This lets the widget read your system. It cannot change anything.
+**2. Approve access.** Tap "Continue to Enphase login", log in with your normal Enphase account (not the developer one), tap Authorize, then tap **Close**. This lets the widget read your system. It cannot change anything.
 
-**3. Fill in the form.** Your system ID is filled in for you. Enter the rest and tap Save, then the ✕.
+**3. Fill in the form.** Your system ID is filled in for you. Enter the rest and tap Save, then **Close**.
 
 | Setting | What to enter |
 |---|---|
 | System turn-on date | The day your system started producing. Data is counted from this day; pick a later date if your early data was wrong. |
 | Peak AC power | The highest kW you have seen in the Enphase app. |
 | Panel tilt | In degrees. Use 30 if unsure. |
-| ZIP code | For weather, sunrise and sunset. |
+| ZIP code | A 5-digit US ZIP code, for weather, sunrise and sunset. |
+| Outside the US | Leave ZIP code empty and enter your latitude and longitude here as two plain numbers, latitude first, such as `51.51, -0.13`. South and west are negative. Any maps app can give them, and a rough location is fine. This has not been tested outside the US yet. |
+| My utility banks kWh credits | Leave on for one-for-one net metering. Switch off for net billing, such as California NEM 3; setup then asks only for a date to count from. |
 | Banked credits | The kWh balance and date from your most recent bill, or 0. |
 | True-up month | The month your utility resets banked credits. |
 | Enphase shows consumption | On if the Enphase app shows consumption, not just production. |
+| Show Exported / Imported | Off shows Cons. On shows energy sent to the grid and taken from it in its place. |
 | Title | The name shown on the widget. |
+
+With neither a ZIP code nor a latitude and longitude, setup asks you to tap Save a second time. All the solar numbers still work. You lose the weather icon and the dirty-panel warning, which needs your location to tell dirt from a low winter sun.
 
 Run setup again any time to change a setting. It opens straight to the form with no login. The usual reason is a new banked-credit balance from a bill.
 
-### The tap shortcut
+### Lock Screen widget (optional)
 
-This is optional. It makes a tap on the widget open the Enphase app.
+The same script can also show a small widget on your Lock Screen, so you can see how today is going without unlocking your phone. It adds no Enphase requests.
 
-In Apple's **Shortcuts** app, make a new shortcut with one action, **Open App**, set to the Enphase app (listed as **Enlighten**). Name the shortcut exactly `Open Enlighten`.
+It shows three numbers, all counted from midnight: **Today** (energy produced so far), **Peak** (the highest power your array has reached today) and **Net** (produced minus consumed today). On the right are the time of the newest reading and the same weather icon as the Home Screen widget.
 
-On newer iPhones you can type “Open the Enlighten app” in the **Describe a shortcut** box. The look of the Shortcuts app varies between iOS versions.
+<img src="images/lock-tile.png" alt="The Lock Screen widget" width="280">
+
+1. Wake your iPhone and press and hold the Lock Screen.
+2. Tap **Customize**. Your Lock Screen opens for editing.
+3. Tap the widget box.
+4. The box holds two wide widgets. If it is full, tap the **−** at the top left of one to remove it.
+5. Scroll the list of apps at the bottom and tap **Scriptable**. A Scriptable widget drops into the empty spot. If you are offered a choice of shapes, choose the wide one.
+6. Tap the new widget. Next to **Script**, choose **OverEngineered Solar**. Leave the other settings as they are.
+7. Tap **Done**.
+
+The Lock Screen widget counts from midnight. The Home Screen widget shows the last 24 hours, so the two will differ, most of all in the morning. The Lock Screen Net is how much today has added to, or taken from, your bank.
+
+Peak on the Lock Screen is the highest power reached today. The kW number on the Home Screen widget is different: it is what your array reaches on a clear day, taken from the last five clear days, and it is what the Max Power and Dirty labels are judged against.
+
+A tap on it opens the Enphase app, the same as the Home Screen widget. It asks iOS for a refresh about every 15 minutes during the day, so it keeps up with the Home Screen widget. Those refreshes only redraw the saved numbers; they make no Enphase requests.
 
 ### Updating to a newer version
 
@@ -145,14 +174,15 @@ Paste the new code over the old script in Scriptable. Your settings and login ar
 |---|---|
 | Run the setup script first | No settings were found. Run setup. |
 | Reauth needed | Enphase no longer accepts the saved login. Run setup and tap "Log in again". |
+| No data from Enphase yet | Enphase did not return data and nothing is saved yet. The line under it says what to check. |
 | Something went wrong | An unexpected error. Run the widget script inside Scriptable to see the details. |
 
 ## Why it isn't fully real time
 
-The widget updates about once an hour while the sun is up (occasionally an hour and a quarter), every one to two hours in the evening, and not at all between 10 PM and 5 AM. The time in the top right corner is the time of the newest data, so it shows how fresh the numbers are. That pace is on purpose, and there are two reasons.
+The widget updates about once an hour while the sun is up (occasionally an hour and a quarter), every one to two hours in the evening, and not at all between 10 PM and 5 AM. The time in the top right corner is the time of the newest data, so it shows how fresh the numbers are. The weather icon is refreshed about every half hour in daylight, which costs no Enphase requests. That pace is on purpose, and there are two reasons.
 
 - **Enphase's free plan allows 1,000 requests a month.** That is roughly 33 a day, and one refresh can take more than one request. Updating every few minutes would use up the month in a few days.
-- **iOS decides when a widget runs.** A script can ask to be woken, but iOS picks the actual moment and often runs it late. No home-screen widget can be truly live.
+- **iOS decides when a widget runs.** A script can ask to be woken, but iOS picks the actual moment and often runs it late. No Home Screen widget can be truly live.
 
 Enphase also publishes each 15-minute reading before it is complete, and takes about ten minutes to finish it. The widget waits for the finished reading before showing it as "current power", so that figure is typically 10 to 25 minutes behind the Enphase app.
 
@@ -161,6 +191,7 @@ Enphase also publishes each 15-minute reading before it is complete, and takes a
 - The widget counts every request it makes and keeps the running total for the month.
 - It plans each month to about 950 requests and refuses to go past 990, leaving a margin under the limit.
 - Nothing is requested between 10 PM and 5 AM.
+- If Enphase's data stops updating for a while, the widget checks about once an hour instead of on every run, so it never burns through the day waiting.
 - Production is requested about hourly while the sun is up.
 - Consumption is requested every two hours, and hourly near the start and end of the day when the month has requests to spare.
 - Daily totals and the fault check are requested once a day.
@@ -168,15 +199,25 @@ Enphase also publishes each 15-minute reading before it is complete, and takes a
 
 In simulated months, including heavy-use ones, the busiest came to about 950 requests and no day went without data.
 
+## How it works
+
+For what the scripts do, which requests they make, how each number is worked out and how to change things, see [DEVELOPERS.md](DEVELOPERS.md).
+
+### See it before you set it up
+
+`dev-sandbox-overengineered-solar.js` shows the widget with made-up numbers: small and large arrays, sunny and cloudy days, a dirty array, the Lock Screen widget and more. Paste it into Scriptable the same way as the other scripts and run it. It needs no Enphase account and never goes online. It is also the place to try a change of your own.
+
 ## Privacy
 
-Everything stays on your phone. Setup saves two files in Scriptable's local storage: `overengineered-solar-config.json` (your settings and keys) and `overengineered-solar-token.json` (your Enphase login tokens). The scripts talk only to Enphase, to Open-Meteo for weather, and to Zippopotam.us to turn your ZIP code into coordinates.
+Everything stays on your phone. Setup saves two files in Scriptable's local storage: `overengineered-solar-config.json` (your settings and keys) and `overengineered-solar-token.json` (your Enphase login tokens). The scripts talk only to Enphase, to Open-Meteo for weather, and, if you entered a ZIP code, to Zippopotam.us to turn it into coordinates.
 
 ## Debugging
 
-Run the widget script inside Scriptable. It shows a status report and copies it to the clipboard. Keys and tokens appear only as their last four characters. The setup script copies a similar report when it finishes.
+If something looks wrong, open Scriptable and tap the widget script to run it. It shows a debug report and copies it to the clipboard, so you can paste it straight into a new issue on GitHub. The report is safe to share: keys, tokens and your system ID appear only as their last four characters. The setup script copies a similar report when it finishes.
 
 ## Support
+
+This isn't my full-time job, so I have little time to make updates, and the widget is shared as it is. I would still love to hear if it helped you as much as it helped me, or if you think this is what Enphase should build. Open an issue on GitHub to tell me. It doesn't have to be a problem.
 
 This widget is free and always will be for personal use. If it's useful to you and you'd like to say thanks, you can buy me a coffee: [buymeacoffee.com/overengineeredtech](https://buymeacoffee.com/overengineeredtech)
 
