@@ -1,5 +1,5 @@
 
-// [2026.10.12.1613] OverEngineered
+// [2026.10.16.0600] OverEngineered
 /*
  * OverEngineered Solar
  * Required Notice: Copyright (c) 2026 OverEngineered-Tech
@@ -14,7 +14,7 @@
 // ===== SETTINGS: read from the file the setup script writes =====
 
 // Shown in the debug report. Keep it the same as the stamp on the first line.
-const WIDGET_VERSION = "2026.10.12.1613";
+const WIDGET_VERSION = "2026.10.16.0600";
 
 const fm = FileManager.local();
 const CONFIG_FILE_NAME = "overengineered-solar-config.json";
@@ -59,7 +59,7 @@ const SHOW_EXPORTED_IMPORTED = !!(CFG && CFG.showExportedImported);
 const WIDGET_TITLE = (CFG && String(CFG.title || "").trim()) || "OverEngineered Solar";
 const LIFETIME_START_DATE = CFG ? CFG.lifetimeStartDate : "2026-01-01";
 // Bump this when the saved history changes shape. Saved history from another version is fetched again.
-const SCRIPT_VERSION = 10;
+const SCRIPT_VERSION = 11;
 
 const BANK_BASELINE_KWH = (CFG && typeof CFG.bankBaselineKwh === "number") ? CFG.bankBaselineKwh : 0;
 
@@ -70,6 +70,12 @@ const ARRAY_OBSERVED_MAX_KW = CFG ? CFG.arrayObservedMaxKw : 1;
 // False for net billing (such as California NEM 3): the box shows net since a chosen date, not a kWh bank.
 // Settings files from before this switch count as true.
 const BANKS_KWH_CREDITS = !(CFG && CFG.banksKwhCredits === false);
+// The month the utility resets banked credits (1 to 12), from setup. Used only to draw the 12-month bank line.
+const TRUE_UP_MONTH = (CFG && Number.isInteger(CFG.trueUpMonth) && CFG.trueUpMonth >= 1 && CFG.trueUpMonth <= 12)
+  ? CFG.trueUpMonth : null;
+// On (setup switch "12-month bank chart", on by default, and on for older settings files without it): the bank
+// box shows today's Net beside the trend mark and a small 12-month bank line on the right. Off: the original layout.
+const SHOW_BANK_CHART = !(CFG && CFG.showBankChart === false);
 // At this share of the expected peak or more, the icon is the bright sun, whatever the weather service says.
 const SUN_ICON_PEAK_RATIO = 0.85;
 // Off on purpose. Set to true to show the newest power reading in small text beside the "Array Status"
@@ -148,6 +154,11 @@ const STALL_MAX_GAP_MS = 60 * 60 * 1000;
 // In daylight the time on the widget turns orange once the newest production reading is this old, so stale
 // numbers never look current.
 const STALE_READING_MS = 2 * 60 * 60 * 1000;
+// Production is fetched only while the sun is up, so the last readings before sunset would never arrive.
+// One extra production fetch this long after sunset picks them up (one request a day).
+const PROD_TAIL_AFTER_SUNSET_MS = 30 * 60 * 1000;
+// After dark, a production reading older than this no longer says what the array is making now: show 0 kW.
+const NIGHT_KW_STALE_MS = 60 * 60 * 1000;
 
 // The power curve is 24 hourly averages, ending now.
 const HOURLY_BUCKET_COUNT = 24;
@@ -459,6 +470,78 @@ function bankTrendDir(avgNetTrendWh) {
 }
 
 // Net per day, only for days where both production and consumption have a reading.
+// The bank for each of the last 12 months, for the small line in the bank box. Worked out from the daily
+// history already fetched, so it costs no requests. From the bill date on it is the same sum as the Banked
+// number. Before the bill date it is worked back from the bill, taking each day's net away again. Going back
+// past a true-up (the 1st of the true-up month), the balance before it cannot be worked back, so it is
+// counted up from zero instead, never below zero. Days before the history begins are left blank, so on a
+// young system the line starts part way across. The top and bottom still come from every day. A day missing either meter counts as zero net, as it does
+// for the Banked number. Returns null when there is too little to draw; the box then keeps its original layout.
+const BANK_YEAR_DAYS = 365;
+// Small dots on the bottom edge of the mini graphs for a sense of time, with no labels: quarter starts on the
+// bank chart, the 1st of the month on the 30-day chart, midnight on the Array Status chart. Same in every
+// country (no words, no clock format). The renderers can still draw very light vertical lines (markers), but
+// none is used: the lines crossed the three boxes like a crosshair.
+const CHART_MARKER_ALPHA = 0.16;
+// One point every two weeks (27 across a year). At 58 points wide, weekly points sat about one per pixel and
+// drew weather wobble, not the shape; on a small or break-even array that wobble could fill the box.
+const BANK_YEAR_STEP_DAYS = 14;
+function buildBankYear(prodDays, consDays, startDateStr, baselineWh, baselineDateStr, trueUpMonth, banksKwh) {
+  try {
+    const n = Math.min(prodDays.length, consDays.length);
+    if (!(n >= 2)) return null;
+    const net = (i) => (prodDays[i] > 0 && consDays[i] > 0) ? prodDays[i] - consDays[i] : 0;
+    const start = new Date(startDateStr + "T00:00:00Z");
+    if (isNaN(start.getTime())) return null;
+    const isResetDay = (i) => {
+      if (!banksKwh || !trueUpMonth) return false;
+      const d = new Date(start.getTime() + i * 86400000);
+      return d.getUTCDate() === 1 && d.getUTCMonth() + 1 === trueUpMonth;
+    };
+    let a = daysBetweenDateStrs(startDateStr, baselineDateStr);
+    if (!isFinite(a) || a < -1) a = -1;
+    if (a > n - 1) a = n - 1;
+    const bank = new Array(n);
+    let v = baselineWh;
+    if (a >= 0) bank[a] = v;
+    for (let i = a + 1; i < n; i++) { v += net(i); bank[i] = v; }
+    let reset = -1;
+    for (let i = a - 1; i >= 0; i--) {
+      if (isResetDay(i + 1)) { reset = i + 1; break; }
+      bank[i] = bank[i + 1] - net(i + 1);
+    }
+    if (reset > 0) {
+      let u = 0;
+      for (let i = 0; i < reset; i++) {
+        if (i > 0 && isResetDay(i)) u = 0;
+        u = Math.max(0, u + net(i));
+        bank[i] = u;
+      }
+    }
+    const first = Math.max(0, n - BANK_YEAR_DAYS);
+    let topWh = -Infinity;
+    let lowWh = Infinity;
+    for (let i = first; i < n; i++) {
+      if (bank[i] > topWh) topWh = bank[i];
+      if (bank[i] < lowWh) lowWh = bank[i];
+    }
+    const slots = Math.floor((BANK_YEAR_DAYS - 1) / BANK_YEAR_STEP_DAYS) + 1;
+    const points = [];
+    let firstIndex = -1;
+    for (let k = slots - 1; k >= 0; k--) {
+      const i = n - 1 - k * BANK_YEAR_STEP_DAYS;
+      if (i < 0) { points.push(0); continue; }
+      if (firstIndex === -1) firstIndex = points.length;
+      points.push(Math.round(bank[i]));
+    }
+    if (firstIndex === -1 || points.length - firstIndex < 2) return null;
+    if (!points.every((x) => isFinite(x)) || !isFinite(topWh) || !isFinite(lowWh)) return null;
+    return { points, firstIndex, topWh: Math.round(topWh), lowWh: Math.round(lowWh), days: n - first };
+  } catch (e) {
+    return null;
+  }
+}
+
 function buildPairedNets(prodArr, consArr) {
   const nets = [];
   const len = Math.min(prodArr.length, consArr.length);
@@ -877,7 +960,10 @@ function parseIntervals(raw, label, sinceMs, anchorMs, lookupMs) {
       prevEndMs = tMs;
       prevWh = wh;
     }
-    if (sinceMs !== undefined && tMs >= sinceMs) {
+    // A reading stamped with its END time that ends exactly at the cutoff covers the minutes before it, so it
+    // belongs to the day before. A reading stamped with its START time at the cutoff belongs to the new day.
+    const sinceIncludes = tsField === "start_at" ? tMs >= sinceMs : tMs > sinceMs;
+    if (sinceMs !== undefined && sinceIncludes) {
       sinceCutoffWh += wh;
       if (wh > sinceCutoffMaxWh) sinceCutoffMaxWh = wh;
     }
@@ -912,14 +998,15 @@ function parseIntervals(raw, label, sinceMs, anchorMs, lookupMs) {
 // home battery it isn't grid flow at all, because the battery sits between the house and the grid.
 // Returns null when there isn't enough to go on (no consumption meters, or data saved by an older version).
 const GRID_FLOW_MIN_READINGS = 60;
-function gridFlowWh(rd, nowMs) {
+function gridFlowWh(rd, nowMs, startMs) {
   if (usingEstimatedConsumption()) return null;
   const prodList = rd && rd.prod && rd.prod.readingsWh;
   const consList = rd && rd.cons && rd.cons.readingsWh;
   if (!Array.isArray(prodList) || !Array.isArray(consList) || prodList.length === 0) return null;
   const prodAt = new Map(prodList);
   const prodNewestMs = prodList.reduce((mx, r) => Math.max(mx, r[0]), 0);
-  const windowStartMs = nowMs - 24 * 60 * 60 * 1000;
+  // Past 24 hours, or from startMs (midnight, for the Today view) when given.
+  const windowStartMs = (typeof startMs === "number") ? startMs : nowMs - 24 * 60 * 60 * 1000;
   let exportedWh = 0;
   let importedWh = 0;
   let used = 0;
@@ -1013,10 +1100,92 @@ function readingIsStale(rd, weatherIcon, nowMs) {
   return nowMs - rd.prod.lastEndMs > STALE_READING_MS;
 }
 
+// Small dot on the bottom edge of the 30-day chart at the 1st of each month in the window, so the line has a sense of time.
+// The 30 daily totals end on the day before the history was fetched, so point k is that many days back.
+// Skipped when the 30 points are not 30 calendar days (a young system or a day with no production).
+const Q2_MONTH_DOT = true;
+const Q2_DASHED_USE_LINE = true;
+function monthStartIndexes(pointCount, fetchedAtMs, gapless) {
+  const out = [];
+  if (pointCount !== 30 || gapless === false || !(fetchedAtMs > 0)) return out;
+  const f = new Date(fetchedAtMs);
+  for (let k = 0; k < pointCount; k++) {
+    const d = new Date(f.getFullYear(), f.getMonth(), f.getDate() - 1 - (pointCount - 1 - k));
+    if (d.getDate() === 1) out.push(k);
+  }
+  return out;
+}
+
+// Small dots on the bottom edge of the bank chart at the start of each quarter (Jan, Apr, Jul, Oct 1).
+// The same dot size and strength is used on the other two charts.
+const BANK_QUARTER_TICKS = true;
+// How much yesterday's part of the Array Status curve is faded (0 = not at all). 57% was picked on the phone
+// from 35 to 65% at several times of day.
+const YESTERDAY_FADE = 0.57;
+const BANK_TICK_HEIGHT = 2;
+const BANK_TICK_ALPHA = 0.4;
+function bankChartQuarterTicks(pointCount, nowMs) {
+  const out = [];
+  if (!BANK_QUARTER_TICKS || !(pointCount >= 2)) return out;
+  const today = new Date(nowMs);
+  const todayMs = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  for (const y of [today.getFullYear() - 1, today.getFullYear()]) {
+    for (const m of [0, 3, 6, 9]) {
+      const daysBack = Math.round((todayMs - new Date(y, m, 1).getTime()) / 86400000);
+      if (daysBack >= 0 && daysBack <= 364) out.push((pointCount - 1) - daysBack * (pointCount - 1) / 364);
+    }
+  }
+  return out;
+}
+
+// What the bank line needs: the saved 12-month points with today's balance as the last one, lifted so the
+// lowest point is zero (a deficit still draws). Null when there is nothing sound to draw.
+function bankChartInputs(bankYear, liveBankWh) {
+  if (!bankYear || !Array.isArray(bankYear.points) || bankYear.points.length < 2) return null;
+  if (typeof liveBankWh !== "number" || !isFinite(liveBankWh)) return null;
+  const firstIndex = Number.isInteger(bankYear.firstIndex) ? bankYear.firstIndex : 0;
+  if (firstIndex < 0 || bankYear.points.length - firstIndex < 2) return null;
+  const pts = bankYear.points.slice(0, -1).concat([liveBankWh]);
+  const real = pts.slice(firstIndex);
+  const top = Math.max(typeof bankYear.topWh === "number" ? bankYear.topWh : -Infinity, ...real);
+  const low = Math.min(0, typeof bankYear.lowWh === "number" ? bankYear.lowWh : 0, ...real);
+  if (!isFinite(top) || !isFinite(low) || top - low <= 0) return null;
+  return {
+    values: pts.map((v, k) => (k < firstIndex ? 0 : v - low)),
+    ceiling: top - low,
+    now: liveBankWh - low,
+    firstIndex,
+  };
+}
+
+// After sunset: has the day's last production fetch happened before the readings up to sunset could exist?
+// True once, about 30 minutes after sunset, until a fetch is made after that point.
+function prodTailPending(meterData, prodFetchedAtMs, sunsetMs, nowMs) {
+  if (!meterData || !meterData.lastEndMs || typeof sunsetMs !== "number") return false;
+  if (dateStr(new Date(sunsetMs)) !== dateStr(new Date(nowMs))) return false;
+  const tailAtMs = sunsetMs + PROD_TAIL_AFTER_SUNSET_MS;
+  if (nowMs < tailAtMs) return false;
+  if (typeof prodFetchedAtMs === "number" && prodFetchedAtMs >= tailAtMs) return false;
+  return meterData.lastEndMs < sunsetMs;
+}
+
+// Latest power for the curve end and the weather log: after dark an old reading is shown as 0 kW.
+function displayLatestKw(rd, weatherIcon, nowMs) {
+  if (!rd || !rd.prod || typeof rd.prod.latestKw !== "number") return null;
+  if (weatherIcon && weatherIcon.isDay === false && rd.prod.lastEndMs && nowMs - rd.prod.lastEndMs > NIGHT_KW_STALE_MS) return 0;
+  return rd.prod.latestKw;
+}
+
 // When the next fetch is worth making: enough new readings, plus the cloud lag. In daylight only
 // production sets the clock; consumption rides along.
-function nextMeterDueMs(rd, isSunUp) {
+function nextMeterDueMs(rd, isSunUp, sunsetMs) {
   const due = [];
+  if (!isSunUp && rd && rd.prod && rd.prod.lastEndMs && typeof sunsetMs === "number" &&
+      dateStr(new Date(sunsetMs)) === dateStr(new Date()) &&
+      !(typeof rd.prodFetchedAt === "number" && rd.prodFetchedAt >= sunsetMs + PROD_TAIL_AFTER_SUNSET_MS) &&
+      rd.prod.lastEndMs < sunsetMs) {
+    due.push(Math.max(sunsetMs + PROD_TAIL_AFTER_SUNSET_MS, meterRestedAtMs(rd.prodFetchedAt, rd.prodStalls)));
+  }
   if (isSunUp && rd && rd.prod && rd.prod.lastEndMs) {
     due.push(Math.max(
       rd.prod.lastEndMs + PROD_INTERVALS_PER_PULL * MS_PER_INTERVAL + ENPHASE_CLOUD_LAG_MS,
@@ -1070,7 +1239,10 @@ async function getRolling24h(accessToken, weatherIcon) {
   // wake look due.
   const prodRested = !cached || nowMs >= meterRestedAtMs(cached.prodFetchedAt, cached.prodStalls);
   const consRested = !cached || nowMs >= meterRestedAtMs(cached.consFetchedAt || cached.fetchedAt, cached.consStalls);
-  const prodReady = isSunUp && prodRested && meterIntervalsElapsed(cached && cached.prod, nowMs) >= PROD_INTERVALS_PER_PULL;
+  const tailPending = !isSunUp && !quiet && prodTailPending(cached && cached.prod, cached && cached.prodFetchedAt,
+    weatherIcon ? weatherIcon.sunsetMs : null, nowMs);
+  const prodReady = (isSunUp && prodRested && meterIntervalsElapsed(cached && cached.prod, nowMs) >= PROD_INTERVALS_PER_PULL) ||
+    (tailPending && prodRested);
   const consElapsed = meterIntervalsElapsed(cached && cached.cons, nowMs);
   const hourlyConsNow = inHourlyConsWindow(getConsPlan(), nowMs);
   const consReady = consRested && (isSunUp
@@ -1174,11 +1346,14 @@ async function getHistoryStats(accessToken) {
     cached.data.estimatedBankWh !== undefined &&
     cached.data.last7ProdWh !== undefined &&
     cached.data.last30ProdWh !== undefined &&
+    // Added in 1515: a history saved by an older version lacks it, so it is fetched once more, then daily as usual.
+    cached.data.lastDayDate !== undefined &&
     cached.data.serviceReq !== undefined &&
     cached.data.scriptVersion === SCRIPT_VERSION &&
     cached.data.historyStartDate === LIFETIME_START_DATE &&
     cached.data.bankBaselineKwh === BANK_BASELINE_KWH &&
     cached.data.bankBaselineDate === BANK_BASELINE_DATE &&
+    cached.data.trueUpMonth === TRUE_UP_MONTH &&
     !cached.data.debugInfo;
 
   if (cacheIsFresh && cacheHasExpectedFields) {
@@ -1281,6 +1456,8 @@ async function getHistoryStats(accessToken) {
     const sinceBaselineNets = buildPairedNets(sinceBaselineProd, sinceBaselineCons);
     const netSinceBaselineWh = sinceBaselineNets.reduce((sum, v) => sum + v, 0);
     const estimatedBankWh = (BANK_BASELINE_KWH * 1000) + netSinceBaselineWh;
+    const bankYear = buildBankYear(prodDays, consDays, LIFETIME_START_DATE, BANK_BASELINE_KWH * 1000,
+      BANK_BASELINE_DATE, TRUE_UP_MONTH, BANKS_KWH_CREDITS);
 
     const todayProdRaw = rawProdDays[completeDays];
     const todayConsRaw = rawConsDays[completeDays];
@@ -1306,10 +1483,17 @@ async function getHistoryStats(accessToken) {
       lifetimeAvgConsWh,
       last7ProdWh,
       last30ProdWh,
+      last30Gapless: prod30.length === 30 && prod30.every((v) => v > 0),
       serviceReq,
       estimatedBankWh,
+      bankYear,
+      trueUpMonth: TRUE_UP_MONTH,
       todayProdWhFromHistory: todayProdRaw !== undefined ? todayProdRaw : null,
       todayConsWhFromHistory: todayConsRaw !== undefined ? todayConsRaw : null,
+      // Yesterday's whole-day totals, for the Today view's "ahead of yesterday at this time" colours.
+      lastDayDate: (() => { const d = new Date(end); d.setDate(d.getDate() - 1); return dateStr(d); })(),
+      lastDayProdWh: prodDays.length ? prodDays[prodDays.length - 1] : null,
+      lastDayConsWh: consDays.length ? consDays[consDays.length - 1] : null,
       historyStartDate: LIFETIME_START_DATE,
       scriptVersion: SCRIPT_VERSION,
       bankBaselineKwh: BANK_BASELINE_KWH,
@@ -1328,19 +1512,19 @@ async function getHistoryStats(accessToken) {
 
 const GREEN = new Color("#4cae66");
 const ORANGE = new Color("#e8935a");
-const RED = new Color("#ff453a");
+// The worst states (Very Dirty, Service Req): a lighter red-orange, not a harsh red (Tim's preference).
+const RED = new Color("#f2725f");
 const GREY = new Color("#bcbcc0");
 
 function netColor(wh) {
   if (wh === null || wh === undefined) return GREY;
-  if (wh > 0) return GREEN;
-  if (wh < 0) return ORANGE;
-  return GREY;
+  // Zero counts as green (Tim, 2026-10-15): breaking even is not a loss. Same on the small widget.
+  return wh >= 0 ? GREEN : ORANGE;
 }
 
 // The 30-day trend line. The grey line is average consumption. The trend is green above it and orange
 // below, split exactly where it crosses.
-function renderLineSparkline(values, width, height, threshold, fallbackColor) {
+function renderLineSparkline(values, width, height, threshold, fallbackColor, markers, ticks) {
   if (!values || values.length < 2) return null;
   const ctx = new DrawContext();
   ctx.size = new Size(width, height);
@@ -1367,11 +1551,36 @@ function renderLineSparkline(values, width, height, threshold, fallbackColor) {
     ctx.strokePath();
   }
 
+  // Faint vertical lines under everything else.
+  if (markers && markers.length) {
+    ctx.setLineWidth(1);
+    for (const k of markers) {
+      const mx = Math.round(k * stepX) + 0.5;
+      strokeSeg(new Point(mx, 0), new Point(mx, height), new Color("#ffffff", CHART_MARKER_ALPHA));
+    }
+  }
+
+  // Small dots on the bottom edge (point numbers), same size and strength as on the bank chart.
+  if (ticks && ticks.length) {
+    ctx.setLineWidth(1);
+    for (const k of ticks) {
+      const tx = Math.round(k * stepX) + 0.5;
+      strokeSeg(new Point(tx, height), new Point(tx, height - BANK_TICK_HEIGHT), new Color("#ffffff", BANK_TICK_ALPHA));
+    }
+  }
+
   if (hasThreshold) {
     const waterY = yFor(threshold);
     ctx.setLineWidth(1);
 
-    strokeSeg(new Point(0, waterY), new Point(width, waterY), new Color("#8e8e93", 0.75));
+    if (Q2_DASHED_USE_LINE) {
+      // Dashed like the reference lines on the other two charts.
+      for (let dx = 0; dx < width; dx += 3.5) {
+        strokeSeg(new Point(dx, waterY), new Point(Math.min(dx + 2, width), waterY), new Color("#ffffff", 0.3));
+      }
+    } else {
+      strokeSeg(new Point(0, waterY), new Point(width, waterY), new Color("#8e8e93", 0.75));
+    }
   }
 
   ctx.setLineWidth(1.5);
@@ -1423,6 +1632,8 @@ function renderMicroLineChart(hourlyKw, ceilingKw, width, height, currentKw, opt
   const smooth = !!(opts && opts.smooth);
   const fill = !!(opts && opts.fill);
   const skipZero = !!(opts && opts.skipZero);
+  // Points before this index are not drawn (no data yet), so the line can start part way across.
+  const firstIndex = (opts && Number.isInteger(opts.firstIndex) && opts.firstIndex > 0) ? opts.firstIndex : 0;
   const ctx = new DrawContext();
   ctx.size = new Size(width, height);
   ctx.opaque = false;
@@ -1488,6 +1699,20 @@ function renderMicroLineChart(hourlyKw, ceilingKw, width, height, currentKw, opt
     return segments;
   }
 
+  // Marker lines (point numbers), drawn first so the curve sits on top.
+  const markers = (opts && Array.isArray(opts.markers)) ? opts.markers : [];
+  for (const mi of markers) {
+    if (typeof mi !== "number" || !isFinite(mi) || mi < 0 || mi > n - 1) continue;
+    const mx = plotX + mi * stepX;
+    const markerPath = new Path();
+    markerPath.move(new Point(mx, plotY));
+    markerPath.addLine(new Point(mx, plotY + plotH));
+    ctx.addPath(markerPath);
+    ctx.setStrokeColor(new Color("#ffffff", CHART_MARKER_ALPHA));
+    ctx.setLineWidth(1);
+    ctx.strokePath();
+  }
+
   ctx.setLineWidth(1);
   const ceilingPath = new Path();
   ceilingPath.move(new Point(plotX, plotY));
@@ -1527,20 +1752,35 @@ function renderMicroLineChart(hourlyKw, ceilingKw, width, height, currentKw, opt
       ctx.strokePath();
     }
   } else {
+    const drawn = firstIndex > 0 ? points.slice(firstIndex) : points;
     if (fill) {
-      const fillPath = buildLinePath(points, smooth);
-      fillPath.addLine(new Point(points[points.length - 1].x, plotY + plotH));
-      fillPath.addLine(new Point(points[0].x, plotY + plotH));
+      const fillPath = buildLinePath(drawn, smooth);
+      fillPath.addLine(new Point(drawn[drawn.length - 1].x, plotY + plotH));
+      fillPath.addLine(new Point(drawn[0].x, plotY + plotH));
       fillPath.closeSubpath();
       ctx.addPath(fillPath);
       ctx.setFillColor(new Color("#4cae66", 0.22));
       ctx.fillPath();
     }
-    const linePath = buildLinePath(points, smooth);
+    const linePath = buildLinePath(drawn, smooth);
     ctx.addPath(linePath);
     ctx.setStrokeColor(GREEN);
     ctx.setLineWidth(1.5);
     ctx.strokePath();
+  }
+
+  // Yesterday's part of the curve (before the midnight point) faded: a rectangle of the widget's own background
+  // colour laid over it, so the curve and its fill read as "not today". The midnight dot is drawn after, so it
+  // stays bright.
+  const dimBefore = (opts && typeof opts.dimBefore === "number" && isFinite(opts.dimBefore)) ? opts.dimBefore : null;
+  const dimAlpha = (opts && typeof opts.dimAlpha === "number") ? opts.dimAlpha : 0;
+  if (dimBefore !== null && dimAlpha > 0 && dimBefore > 0) {
+    const dimW = Math.min(plotW, Math.max(0, dimBefore * stepX));
+    const dimPath = new Path();
+    dimPath.addRect(new Rect(plotX, plotY + 1, dimW, plotH - 1));
+    ctx.addPath(dimPath);
+    ctx.setFillColor(new Color("#1c1c1e", dimAlpha));
+    ctx.fillPath();
   }
 
   if (typeof currentKw === "number" && currentKw > 0) {
@@ -1567,6 +1807,19 @@ function renderMicroLineChart(hourlyKw, ceilingKw, width, height, currentKw, opt
   ctx.addPath(framePath);
   ctx.setStrokeColor(new Color("#636366"));
   ctx.strokePath();
+
+  const tickPos = (opts && Array.isArray(opts.ticks)) ? opts.ticks : [];
+  for (const pos of tickPos) {
+    if (pos < 0 || pos > n - 1) continue;
+    const tx = plotX + pos * stepX;
+    const tp = new Path();
+    tp.move(new Point(tx, plotY + plotH));
+    tp.addLine(new Point(tx, plotY + plotH - BANK_TICK_HEIGHT));
+    ctx.addPath(tp);
+    ctx.setStrokeColor(new Color("#ffffff", BANK_TICK_ALPHA));
+    ctx.setLineWidth(1);
+    ctx.strokePath();
+  }
 
   return ctx.getImage();
 }
@@ -1703,7 +1956,7 @@ function gate2Active(date) {
 }
 
 // The number and verdict for the Array Status box. Until five clear days are saved it shows the entered
-// maximum as "Max Power", so a new install never starts with a false alarm.
+// maximum as "Max kW" with the plain "Array Status" heading, so a new install never starts with a false alarm.
 function computePeakStats(peakCache, now) {
   const daysRecorded = peakCache.peaks.length;
   const ceilingKw = expectedCeilingKw(peakCache);
@@ -2006,13 +2259,15 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
     return w;
   }
 
-  const todayProducedWh = rd.prod.totalWh;
-  const todayConsumedWh = rd.cons.totalWh;
-  const rollingNetWh = todayProducedWh - todayConsumedWh;
-  const currentProdKw = (rd.prod && typeof rd.prod.latestKw === "number") ? rd.prod.latestKw : null;
-
   const prodSinceMidnightWh = prodTodayWh(rd, Date.now());
   const consSinceMidnightWh = (rd.cons && typeof rd.cons.sinceCutoffWh === "number") ? rd.cons.sinceCutoffWh : null;
+  // Today view (Parameter "today"): the top-left numbers count from midnight. If they can't be worked out yet,
+  // the past 24 hours are shown, with their own heading.
+  const showToday = VIEW_TODAY && prodSinceMidnightWh !== null && consSinceMidnightWh !== null;
+  const todayProducedWh = showToday ? prodSinceMidnightWh : rd.prod.totalWh;
+  const todayConsumedWh = showToday ? consSinceMidnightWh : rd.cons.totalWh;
+  const rollingNetWh = todayProducedWh - todayConsumedWh;
+  const currentProdKw = (rd.prod && typeof rd.prod.latestKw === "number") ? rd.prod.latestKw : null;
   const todayCalendarNetWh = (prodSinceMidnightWh !== null && consSinceMidnightWh !== null)
     ? prodSinceMidnightWh - consSinceMidnightWh
     : null;
@@ -2075,75 +2330,84 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   // Columns do not share a row's width on their own. Each of the four boxes gets the same fixed width.
   todayCol.size = new Size(133, 0);
 
-  const todayLbl = todayCol.addText("Past 24 Hours");
+  // Drawn like the small widget: heading "Prod 24h", Prod big on the left (the hero number, larger than the
+  // other three boxes), Cons (or Exp and Imp) and Net on the right in fixed-width boxes. No unit under Prod:
+  // it crowded the box, and the other boxes already say kWh.
+  const todayLbl = todayCol.addText(showToday ? "Prod Today" : "Prod 24h");
   todayLbl.font = Font.systemFont(9);
   todayLbl.textColor = GREY;
   todayCol.addSpacer(0);
-
-  const todayRow = todayCol.addStack();
-  todayRow.layoutHorizontally();
-  todayRow.centerAlignContent();
 
   const avgProdThreshold = avgProd30dWh ? Math.round(avgProd30dWh / 1000) : null;
   const avgConsThreshold = useThreshold ? Math.round(useThreshold / 1000) : null;
   const prodValNum = Math.round(todayProducedWh / 1000);
   const consValNum = Math.round(todayConsumedWh / 1000);
+  // Today view: against this time yesterday, not a whole day's average (see TODAY_NEUTRAL).
+  const vsY = showToday ? todayVsYesterday(rd, hd, Date.now()) : null;
+  const prodColor = showToday
+    ? (vsY ? (todayProducedWh >= vsY.prodWh ? GREEN : ORANGE) : TODAY_NEUTRAL)
+    : (avgProdThreshold === null) ? GREY : (prodValNum < avgProdThreshold ? ORANGE : GREEN);
+  const consColor = showToday
+    ? (vsY ? (todayConsumedWh <= vsY.consWh ? GREEN : ORANGE) : TODAY_NEUTRAL)
+    : (avgConsThreshold === null) ? GREY : (consValNum > avgConsThreshold ? ORANGE : GREEN);
 
-  const prodColor = (avgProdThreshold === null) ? GREY : (prodValNum < avgProdThreshold ? ORANGE : GREEN);
-  const consColor = (avgConsThreshold === null) ? GREY : (consValNum > avgConsThreshold ? ORANGE : GREEN);
+  const gridFlow = SHOW_EXPORTED_IMPORTED ? gridFlowWh(rd, Date.now(), showToday ? localMidnightMs(new Date()) : undefined) : null;
+  const q1ProdKwh = Number(kwh(todayProducedWh));
+  const q1ConsKwh = Number(kwh(todayConsumedWh));
+  const q1NetKwh = gridFlow
+    ? (Math.round(Number(kwh(gridFlow.exportedWh)) - Number(kwh(gridFlow.importedWh))) || 0)
+    : (isFinite(q1ProdKwh) && isFinite(q1ConsKwh))
+    ? (Math.round(q1ProdKwh - q1ConsKwh) || 0)
+    : Math.round(rollingNetWh / 1000);
 
-  const prodHeroStack = todayRow.addStack();
-  prodHeroStack.layoutHorizontally();
-  prodHeroStack.topAlignContent();
-  const todayProdVal = prodHeroStack.addText(kwh(todayProducedWh));
-  todayProdVal.font = Font.boldSystemFont(22);
+  // Same widths as the small widget, which were tried on the phone up to Prod 250 and Net -110.
+  const Q1_VAL_W = 37;
+  const Q1_LABEL_W = 29;
+  const Q1_RIGHT_W = Q1_VAL_W + 4 + Q1_LABEL_W;
+  const Q1_PROD_W = 133 - Q1_RIGHT_W;
+
+  const todayRow = todayCol.addStack();
+  todayRow.layoutHorizontally();
+  todayRow.centerAlignContent();
+  const q1ProdCol = todayRow.addStack();
+  q1ProdCol.layoutVertically();
+  q1ProdCol.size = new Size(Q1_PROD_W, 0);
+  const todayProdVal = q1ProdCol.addText(kwh(todayProducedWh));
+  todayProdVal.font = Font.boldSystemFont(MEDIUM_PROD_SIZE);
   todayProdVal.textColor = prodColor;
-  prodHeroStack.addSpacer(3);
-  const prodUnit = prodHeroStack.addText("Prod");
-  prodUnit.font = Font.systemFont(9);
-  prodUnit.textColor = GREY;
-
-  todayRow.addSpacer(6);
-
-  // With the setting on, Exported and Imported take the place of Cons: two small lines, because side by
-  // side they did not fit the box. If they can't be worked out, Cons is shown as usual.
-  const gridFlow = SHOW_EXPORTED_IMPORTED ? gridFlowWh(rd, Date.now()) : null;
+  todayProdVal.lineLimit = 1;
+  const q1RightCol = todayRow.addStack();
+  q1RightCol.layoutVertically();
+  q1RightCol.size = new Size(Q1_RIGHT_W, 0);
+  const q1Line = (valueText, label, color) => {
+    const line = q1RightCol.addStack();
+    line.layoutHorizontally();
+    line.bottomAlignContent();
+    const valBox = line.addStack();
+    valBox.size = new Size(Q1_VAL_W, 0);
+    valBox.addSpacer();
+    const v = valBox.addText(valueText);
+    v.font = Font.mediumSystemFont(12);
+    v.textColor = color;
+    v.lineLimit = 1;
+    // 4 pt between the number and its label (2 looked cramped); the label box stays 29 (27 cut "Cons" off).
+    line.addSpacer(4);
+    const lblBox = line.addStack();
+    lblBox.size = new Size(Q1_LABEL_W, 0);
+    const u = lblBox.addText(label);
+    u.font = Font.systemFont(8);
+    u.textColor = GREY;
+    u.lineLimit = 1;
+    lblBox.addSpacer();
+  };
   if (gridFlow) {
-    const flowCol = todayRow.addStack();
-    flowCol.layoutVertically();
-    const flowLine = (wattHours, label, color) => {
-      const line = flowCol.addStack();
-      line.layoutHorizontally();
-      line.topAlignContent();
-      // The number sits right-aligned in a box of fixed width, so "Exp" and "Imp" line up under each
-      // other whatever the two numbers are.
-      const valBox = line.addStack();
-      valBox.size = new Size(24, 0);
-      valBox.addSpacer();
-      const val = valBox.addText(kwh(wattHours));
-      val.font = Font.mediumSystemFont(12);
-      val.textColor = color;
-      // No shrink-to-fit here: next to a flexible spacer, iOS shrinks the text even when it fits.
-      val.lineLimit = 1;
-      line.addSpacer(3);
-      const unit = line.addText(label);
-      unit.font = Font.systemFont(8);
-      unit.textColor = GREY;
-    };
-    flowLine(gridFlow.exportedWh, "Exp", GREEN);
-    flowCol.addSpacer(2);
-    flowLine(gridFlow.importedWh, "Imp", ORANGE);
+    q1Line(kwh(gridFlow.exportedWh), "Exp", GREEN);
+    q1Line(kwh(gridFlow.importedWh), "Imp", ORANGE);
+    q1Line(String(q1NetKwh), "Net", netColor(q1NetKwh));
   } else {
-    const consPair = todayRow.addStack();
-    consPair.layoutHorizontally();
-    consPair.topAlignContent();
-    const consVal = consPair.addText(kwh(todayConsumedWh));
-    consVal.font = Font.mediumSystemFont(14);
-    consVal.textColor = consColor;
-    consPair.addSpacer(3);
-    const consUnit = consPair.addText("Cons");
-    consUnit.font = Font.systemFont(9);
-    consUnit.textColor = GREY;
+    q1Line(kwh(todayConsumedWh), "Cons", consColor);
+    q1RightCol.addSpacer(2);
+    q1Line(String(q1NetKwh), "Net", netColor(q1NetKwh));
   }
 
   todayCol.centerAlignContent();
@@ -2158,14 +2422,16 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   trendCol.layoutVertically();
   trendCol.size = new Size(133, 0);
 
-  const trendLbl = trendCol.addText("30-Day Avg Prod");
+  const trendLbl = trendCol.addText("30d Prod vs Use");
   trendLbl.font = Font.systemFont(9);
   trendLbl.textColor = GREY;
   trendCol.addSpacer(2);
 
+  // Number with "kWh/d" under it on the left; the 30-day line framed in a 58 x 24 box on the right, like the
+  // charts in the bottom row. The line stays two-coloured: green on days at or above average use, orange below.
   const trendRow = trendCol.addStack();
   trendRow.layoutHorizontally();
-  trendRow.topAlignContent();
+  trendRow.centerAlignContent();
 
   const aboveUse = (avgProd30dWh !== null && useThreshold !== null)
     ? (Math.round(avgProd30dWh / 1000) >= Math.round(useThreshold / 1000) ? GREEN : ORANGE)
@@ -2175,19 +2441,33 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   const trendNumVal = avgProd30dWh !== null ? Math.round(avgProd30dWh / 1000) : 0;
   // Text that does not fit is cut off silently, so long numbers drop to a smaller size.
   const trendNeedsShrink = trendValText.length >= 4 || trendNumVal >= 200;
-  const trendVal = trendRow.addText(trendValText);
+  const trendNumCol = trendRow.addStack();
+  trendNumCol.layoutVertically();
+  const trendVal = trendNumCol.addText(trendValText);
   trendVal.font = Font.boldSystemFont(trendNeedsShrink ? 18 : 22);
   trendVal.textColor = aboveUse;
-  trendRow.addSpacer(3);
-  const trendUnit = trendRow.addText("kWh/d");
+  trendVal.lineLimit = 1;
+  const trendUnit = trendNumCol.addText("kWh/d");
   trendUnit.font = Font.systemFont(9);
   trendUnit.textColor = GREY;
-  trendRow.addSpacer(6);
+  trendRow.addSpacer();
 
-  const miniSparkImg = renderLineSparkline(last30ProdWh, 40, 16, useThreshold, aboveUse);
-  if (miniSparkImg) {
-    const miniSparkWidget = trendRow.addImage(miniSparkImg);
-    miniSparkWidget.imageSize = new Size(40, 16);
+  const monthDots = Q2_MONTH_DOT ? monthStartIndexes(last30ProdWh.length, historyResult && historyResult.fetchedAt, hd.last30Gapless) : [];
+  const miniSpark = renderLineSparkline(last30ProdWh, 56, 22, useThreshold, aboveUse, [], monthDots);
+  if (miniSpark) {
+    const framed = new DrawContext();
+    framed.size = new Size(58, 24);
+    framed.opaque = false;
+    framed.respectScreenScale = true;
+    framed.drawImageInRect(miniSpark, new Rect(1, 1, 56, 22));
+    const sparkFrame = new Path();
+    sparkFrame.addRect(new Rect(1, 1, 56, 22));
+    framed.addPath(sparkFrame);
+    framed.setStrokeColor(new Color("#636366"));
+    framed.setLineWidth(1);
+    framed.strokePath();
+    const miniSparkWidget = trendRow.addImage(framed.getImage());
+    miniSparkWidget.imageSize = new Size(58, 24);
   }
 
   trendCol.centerAlignContent();
@@ -2204,7 +2484,25 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   bankCol.layoutVertically();
   bankCol.size = new Size(133, 0);
 
+  // Net comes from Prod and Cons as shown, so the three always agree (never "117 Prod, 118 Cons, 0 Net").
+  // When Exported and Imported are the numbers on show, Net is their difference, for the same reason.
+  const shownProdKwh = Number(kwh(todayProducedWh));
+  const shownConsKwh = Number(kwh(todayConsumedWh));
+  const shownNetKwh = gridFlow
+    ? (Math.round(Number(kwh(gridFlow.exportedWh)) - Number(kwh(gridFlow.importedWh))) || 0)
+    : (isFinite(shownProdKwh) && isFinite(shownConsKwh))
+    ? (Math.round(shownProdKwh - shownConsKwh) || 0)
+    : Math.round(rollingNetWh / 1000);
+  // Bank chart layout only when the setting is on and there is a line to draw; otherwise the original layout.
+  const bankChart = SHOW_BANK_CHART ? bankChartInputs(hd.bankYear, liveBankWh) : null;
+  // With the bank chart on, the label rows and chart rows of both bottom boxes get the same fixed heights, so
+  // the two small charts sit at exactly the same height side by side. Each chart is centred in its row,
+  // and the rows otherwise differ (one line of big number on the left, two lines on the right).
+  const BOTTOM_LABEL_ROW_H = 12;
+  const BOTTOM_CHART_ROW_H = 38;
+
   const bankLblRow = bankCol.addStack();
+  if (bankChart) bankLblRow.size = new Size(0, BOTTOM_LABEL_ROW_H);
   bankLblRow.layoutHorizontally();
   bankLblRow.centerAlignContent();
   let bankLabelText = liveBankWh !== null && liveBankWh < 0 ? "Credit Deficit" : "Banked Credits";
@@ -2217,49 +2515,64 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
       : "Net Energy";
   }
   const bankLbl = bankLblRow.addText(bankLabelText);
-  const bankTrend = bankTrendDir(hd.avgNetTrendWh);
-  if (bankTrend) {
-    bankLblRow.addSpacer(4);
-    const trendSym = SFSymbol.named(bankTrend === "up" ? "arrowtriangle.up.fill" : (bankTrend === "down" ? "arrowtriangle.down.fill" : "minus"));
-    trendSym.applyFont(Font.boldSystemFont(7));
-    const trendImg = bankLblRow.addImage(trendSym.image);
-    trendImg.imageSize = new Size(7, 7);
-    trendImg.tintColor = bankTrend === "up" ? GREEN : (bankTrend === "down" ? ORANGE : GREY);
-  }
+  // No trend mark beside the label (widget 1255): the 12-month bank chart already shows which way it is going.
   bankLbl.font = Font.systemFont(9);
   bankLbl.textColor = GREY;
-  bankCol.addSpacer(0);
 
-  const bankRow = bankCol.addStack();
-  bankRow.layoutHorizontally();
-  bankRow.centerAlignContent();
+  if (bankChart) {
+    // Net is in the top-left box (widget 1255), so this row holds only the label.
+    bankLblRow.addSpacer();
+    bankCol.addSpacer(4);
 
-  const bankValText = kwh(liveBankWh, true);
-  const bankVal = bankRow.addText(bankValText);
-  bankVal.font = Font.boldSystemFont(bankValText.length >= 5 ? 22 : 26);
-  bankVal.textColor = netColor(liveBankWh);
+    const bankRow = bankCol.addStack();
+    bankRow.layoutHorizontally();
+    bankRow.centerAlignContent();
+    bankRow.size = new Size(0, BOTTOM_CHART_ROW_H);
+    // 22, the same as the Prod and 30-day numbers; smaller only for five characters or more. No
+    // shrink-to-fit: beside a flexible gap iOS shrinks or cuts text even when it fits.
+    const bankValText = kwh(liveBankWh, true);
+    const bankNumCol = bankRow.addStack();
+    bankNumCol.layoutVertically();
+    const bankVal = bankNumCol.addText(bankValText);
+    bankVal.font = Font.boldSystemFont(bankValText.length <= 4 ? 22 : (bankValText.length === 5 ? 20 : 17));
+    bankVal.textColor = netColor(liveBankWh);
+    bankVal.lineLimit = 1;
+    const bankUnit = bankNumCol.addText("kWh");
+    bankUnit.font = Font.systemFont(9);
+    bankUnit.textColor = GREY;
+    bankRow.addSpacer();
+    // Top of the box: the highest balance in the last 12 months. Dotted line: today's balance, so it meets
+    // the right end of the line. Below zero, the floor drops so a deficit still fits.
+    const bankChartImg = renderMicroLineChart(bankChart.values, bankChart.ceiling, 58, 24, bankChart.now,
+      { smooth: true, fill: true, firstIndex: bankChart.firstIndex,
+        ticks: bankChartQuarterTicks(bankChart.values.length, Date.now()) });
+    const bankChartWidget = bankRow.addImage(bankChartImg);
+    bankChartWidget.imageSize = new Size(58, 24);
+  } else {
+    // Original layout: the bank number with today's Net beside it.
+    bankCol.addSpacer(0);
+    const bankRow = bankCol.addStack();
+    bankRow.layoutHorizontally();
+    bankRow.centerAlignContent();
 
-  bankRow.addSpacer(6);
+    const bankValText = kwh(liveBankWh, true);
+    const bankVal = bankRow.addText(bankValText);
+    bankVal.font = Font.boldSystemFont(bankValText.length >= 5 ? 22 : 26);
+    bankVal.textColor = netColor(liveBankWh);
 
-  const storedSubCol = bankRow.addStack();
-  storedSubCol.layoutHorizontally();
-  storedSubCol.topAlignContent();
-  // Net comes from Prod and Cons as shown, so the three always agree (never "117 Prod, 118 Cons, 0 Net").
-  // When Exported and Imported are the numbers on show, Net is their difference, for the same reason.
-  const shownProdKwh = Number(kwh(todayProducedWh));
-  const shownConsKwh = Number(kwh(todayConsumedWh));
-  const shownNetKwh = gridFlow
-    ? (Math.round(Number(kwh(gridFlow.exportedWh)) - Number(kwh(gridFlow.importedWh))) || 0)
-    : (isFinite(shownProdKwh) && isFinite(shownConsKwh))
-    ? (Math.round(shownProdKwh - shownConsKwh) || 0)
-    : Math.round(rollingNetWh / 1000);
-  const storedVal = storedSubCol.addText(String(shownNetKwh));
-  storedVal.font = Font.mediumSystemFont(14);
-  storedVal.textColor = netColor(shownNetKwh);
-  storedSubCol.addSpacer(3);
-  const storedLbl = storedSubCol.addText("Net");
-  storedLbl.font = Font.systemFont(9);
-  storedLbl.textColor = GREY;
+    bankRow.addSpacer(6);
+
+    const storedSubCol = bankRow.addStack();
+    storedSubCol.layoutHorizontally();
+    storedSubCol.topAlignContent();
+    const storedVal = storedSubCol.addText(String(shownNetKwh));
+    storedVal.font = Font.mediumSystemFont(14);
+    storedVal.textColor = netColor(shownNetKwh);
+    storedSubCol.addSpacer(3);
+    const storedLbl = storedSubCol.addText("Net");
+    storedLbl.font = Font.systemFont(9);
+    storedLbl.textColor = GREY;
+  }
 
   bankCol.centerAlignContent();
 
@@ -2273,12 +2586,28 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   lifeCol.layoutVertically();
   lifeCol.size = new Size(133, 0);
 
+  // The heading names the array's condition when something is off ("Array Dirty", "Service Required"), in
+  // the status colour; otherwise "Array Status". The line under the number always reads "Max kW".
+  const serviceReqActive = hd.serviceReq === true;
+  const peakIsNeutral = !serviceReqActive &&
+    (pd.status.word === "Clean" || pd.status.word === "--" || pd.status.word === "Winter Sun");
+  const peakStatusDisplayColor = serviceReqActive ? RED : pd.status.color;
+  const arrayHeading = serviceReqActive ? "Service Required"
+    : pd.status.word === "Very Dirty" ? "Array Very Dirty"
+    : pd.status.word === "Dirty" ? "Array Dirty"
+    : pd.status.word === "Winter Sun" ? "Winter Sun"
+    : "Array Status";
+
   const lifeHead = lifeCol.addStack();
+  if (bankChart) lifeHead.size = new Size(0, BOTTOM_LABEL_ROW_H);
   lifeHead.layoutHorizontally();
   lifeHead.bottomAlignContent();
-  const lifeLbl = lifeHead.addText("Array Status");
+  // Same as the bank label row beside it, so the two headings line up.
+  if (bankChart) lifeHead.centerAlignContent();
+  const lifeLbl = lifeHead.addText(arrayHeading);
   lifeLbl.font = Font.systemFont(9);
-  lifeLbl.textColor = GREY;
+  lifeLbl.textColor = peakIsNeutral ? GREY : peakStatusDisplayColor;
+  lifeLbl.lineLimit = 1;
   if (SHOW_LATEST_KW && currentProdKw !== null && currentProdKw > 0.05) {
     lifeHead.addSpacer();
     const lifeNow = lifeHead.addText("Latest " + currentProdKw.toFixed(1) + " kW");
@@ -2288,7 +2617,7 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   }
   lifeCol.addSpacer(4);
 
-  const latestKw = (rd.prod && typeof rd.prod.latestKw === "number") ? rd.prod.latestKw : null;
+  const latestKw = displayLatestKw(rd, weatherIcon, Date.now());
   const maxKwToday = (rd.prod && typeof rd.prod.maxKw === "number") ? rd.prod.maxKw : null;
 
   const hourlyKw = (rd.prod && Array.isArray(rd.prod.hourlyKw) && rd.prod.hourlyKw.length === HOURLY_BUCKET_COUNT)
@@ -2313,31 +2642,22 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
 
   const shiftedRecentPeakKw = hoursSinceProdFetch > 0 ? 0 : recentPeakKw;
 
-  const serviceReqActive = hd.serviceReq === true;
-  const peakIsNeutral = !serviceReqActive &&
-    (pd.status.word === "Clean" || pd.status.word === "--" || pd.status.word === "Winter Sun");
-  const peakStatusDisplayColor = serviceReqActive ? RED : pd.status.color;
-
-  const peakLabelText = serviceReqActive ? "Service Req"
-    : pd.status.word === "Very Dirty" ? "Very Dirty"
-    : pd.status.word === "Dirty" ? "Dirty"
-    : pd.status.word === "Clean" ? "Max Power"
-    : pd.status.word;
-
   const histRow = lifeCol.addStack();
+  if (bankChart) histRow.size = new Size(0, BOTTOM_CHART_ROW_H);
   histRow.layoutHorizontally();
   histRow.centerAlignContent();
 
   const peakCol = histRow.addStack();
   peakCol.layoutVertically();
-  const peakVal = peakCol.addText(
-    pd.observedPeakKw !== null ? `${pd.observedPeakKw.toFixed(1)} kW` : "-- kW"
-  );
-  peakVal.font = Font.mediumSystemFont(15);
+  // Set like the bank number: the same font, with its unit line under it.
+  const peakNumText = pd.observedPeakKw !== null ? pd.observedPeakKw.toFixed(1) : "--";
+  const peakVal = peakCol.addText(peakNumText);
+  peakVal.font = Font.boldSystemFont(peakNumText.length <= 4 ? 22 : 20);
   peakVal.textColor = peakStatusDisplayColor;
-  const peakLbl = peakCol.addText(peakLabelText);
+  peakVal.lineLimit = 1;
+  const peakLbl = peakCol.addText("Max kW");
   peakLbl.font = Font.systemFont(9);
-  peakLbl.textColor = peakIsNeutral ? GREY : peakStatusDisplayColor;
+  peakLbl.textColor = GREY;
 
   histRow.addSpacer();
 
@@ -2345,7 +2665,12 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
     const histWidth = 58;
     const histHeight = 24;
     const histCeilingKw = (typeof pd.ceilingKw === "number" && pd.ceilingKw > 0) ? pd.ceilingKw : ARRAY_OBSERVED_MAX_KW;
-    const histImg = renderMicroLineChart(shiftedHourlyKw, histCeilingKw, histWidth, histHeight, shiftedRecentPeakKw, { smooth: true, fill: true, skipZero: true });
+    // Midnight on the curve. Each point is one hour ending at the fetch time (moved on by the overnight
+    // slide), so the boundary between yesterday and today sits half a point before the hour it starts.
+    const curveEndMs = ((typeof rd.prodFetchedAt === "number") ? rd.prodFetchedAt : Date.now()) + hoursSinceProdFetch * 3600000;
+    const midnightIndex = (HOURLY_BUCKET_COUNT - 0.5) - (curveEndMs - localMidnightMs(new Date(curveEndMs))) / 3600000;
+    const histImg = renderMicroLineChart(shiftedHourlyKw, histCeilingKw, histWidth, histHeight, shiftedRecentPeakKw,
+      { smooth: true, fill: true, skipZero: true, ticks: [midnightIndex], dimBefore: midnightIndex, dimAlpha: YESTERDAY_FADE });
     const histWidget = histRow.addImage(histImg);
     histWidget.imageSize = new Size(histWidth, histHeight);
   } else if (latestKw !== null && maxKwToday !== null) {
@@ -2367,11 +2692,291 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   return w;
 }
 
+// Today view colours: production and consumption up to this time yesterday. Yesterday's whole-day total (from
+// the daily history) minus the readings after this time yesterday (the start of the 24-hour readings, up to
+// midnight). Null when it can't be worked out honestly; the Today numbers then stay neutral.
+function yesterdaySoFarWh(meter, dayTotalWh, nowMs) {
+  const list = meter && meter.readingsWh;
+  if (!Array.isArray(list) || list.length < 90 || typeof dayTotalWh !== "number") return null;
+  const Q = 15 * 60 * 1000;
+  const DAY = 24 * 60 * 60 * 1000;
+  const midnightMs = localMidnightMs(new Date(nowMs));
+  const yMidnightMs = localMidnightMs(new Date(midnightMs - 12 * 60 * 60 * 1000));
+  // Where today's number stops: the newest reading if there is one from today. Overnight, production is not
+  // fetched, so its newest reading is from yesterday evening and today's production is taken as zero up to
+  // now; then "now" (to the 15 minutes) is the point to compare at.
+  const endMs = (meter && typeof meter.lastEndMs === "number" && meter.lastEndMs > midnightMs)
+    ? meter.lastEndMs
+    : Math.floor(nowMs / Q) * Q;
+  const cutoffMs = endMs - DAY;                // this time yesterday
+  let firstEndMs = Infinity, lastEndMs = -Infinity;
+  for (const r of list) { if (r[0] < firstEndMs) firstEndMs = r[0]; if (r[0] > lastEndMs) lastEndMs = r[0]; }
+  if (firstEndMs <= yMidnightMs + Q) {
+    // The readings reach back to the start of yesterday (early in the day): add yesterday up directly.
+    if (lastEndMs < cutoffMs) return null;
+    let v = 0;
+    for (const r of list) if (r[0] > yMidnightMs && r[0] <= cutoffMs) v += r[1];
+    return v;
+  }
+  // Later in the day: yesterday's whole-day total minus the readings after this time yesterday. Enphase often
+  // sends 95 readings instead of 96, leaving out the first one after that point; that one slice is filled with
+  // its neighbour (off by a fraction of a kWh at most). With more than one missing there is no comparison.
+  if (firstEndMs > cutoffMs + 2 * Q) return null;
+  let afterThisTimeWh = 0;
+  let firstWh = 0;
+  for (const r of list) {
+    if (r[0] > cutoffMs && r[0] <= midnightMs) afterThisTimeWh += r[1];
+    if (r[0] === firstEndMs) firstWh = r[1];
+  }
+  if (firstEndMs > cutoffMs + Q && firstEndMs <= midnightMs) afterThisTimeWh += firstWh;
+  const v = dayTotalWh - afterThisTimeWh;
+  return v >= 0 ? v : null;
+}
+function todayVsYesterday(rd, hd, nowMs) {
+  const y = new Date(localMidnightMs(new Date(nowMs)) - 12 * 60 * 60 * 1000);
+  if (!hd || hd.lastDayDate !== dateStr(y)) return null;
+  const prodWh = yesterdaySoFarWh(rd && rd.prod, hd.lastDayProdWh, nowMs);
+  const consWh = yesterdaySoFarWh(rd && rd.cons, hd.lastDayConsWh, nowMs);
+  return (prodWh === null || consWh === null) ? null : { prodWh, consWh };
+}
+
+// Type "today" in the widget's Parameter box (Edit Widget) and the top-left numbers count from midnight
+// instead of the past 24 hours, on the medium and small sizes. Blank, the default, is the past 24 hours.
+let VIEW_TODAY = (typeof args !== "undefined" && args && typeof args.widgetParameter === "string")
+  && args.widgetParameter.trim().toLowerCase() === "today";
+// Prod and Cons in the Today view are coloured against this time yesterday (green ahead, orange behind),
+// because part of a day can't be judged against a whole day's average. Until yesterday's totals are saved
+// (early each morning until the first daily history fetch after 5 AM), they show green. Net keeps its colour.
+// No comparison yet (early each morning): green. Tim, 2026-10-16: grey was not obvious and sowed confusion; the
+// day is most likely on track, the same call as Array Status before its first check.
+const TODAY_NEUTRAL = GREEN;
+
+// The Prod number in the medium widget's top-left box: the hero, larger than the 22 pt of the other boxes.
+// Tried on the phone up to "250" with Net "-110" and "210".
+const MEDIUM_PROD_SIZE = 30;
+
+// ===== SMALL WIDGET =====
+// The Small Home Screen size: Past 24 Hours on top (Prod big on the left; Cons, or Exp and Imp, and Net on the
+// right), the Array Status box on the bottom. Same data as the medium widget. Widths are fixed so iOS never
+// squeezes one side for the other; tried on the phone with Prod up to "250" and Net down to "-110".
+const SMALL_PROD_SIZE = 30;
+async function createSmallWidget(rollingResult, historyResult, peakStats, weatherIcon) {
+  const w = new ListWidget();
+  w.backgroundColor = new Color("#1c1c1e");
+  w.setPadding(10, 12, 8, 12);
+
+  const rd = rollingResult && rollingResult.data ? rollingResult.data : null;
+  const hd = historyResult && historyResult.data ? historyResult.data : {};
+  const pd = peakStats || { observedPeakKw: null, ceilingKw: null, status: { word: "--", color: GREY, pctUnder: null } };
+  if (!rd || !rd.cons || !rd.prod) {
+    const t = w.addText("No data yet");
+    t.font = Font.mediumSystemFont(12);
+    t.textColor = Color.orange();
+    return w;
+  }
+
+  // Today view (Parameter "today"), as on the medium widget.
+  const prodMidWh = prodTodayWh(rd, Date.now());
+  const consMidWh = (rd.cons && typeof rd.cons.sinceCutoffWh === "number") ? rd.cons.sinceCutoffWh : null;
+  const showToday = VIEW_TODAY && prodMidWh !== null && consMidWh !== null;
+  const prodWh = showToday ? prodMidWh : rd.prod.totalWh;
+  const consWh = showToday ? consMidWh : rd.cons.totalWh;
+  const gridFlow = SHOW_EXPORTED_IMPORTED ? gridFlowWh(rd, Date.now(), showToday ? localMidnightMs(new Date()) : undefined) : null;
+  const shownProdKwh = Number(kwh(prodWh));
+  const shownConsKwh = Number(kwh(consWh));
+  const netKwh = gridFlow
+    ? (Math.round(Number(kwh(gridFlow.exportedWh)) - Number(kwh(gridFlow.importedWh))) || 0)
+    : (isFinite(shownProdKwh) && isFinite(shownConsKwh))
+    ? (Math.round(shownProdKwh - shownConsKwh) || 0)
+    : Math.round((prodWh - consWh) / 1000);
+
+  const avgProdThreshold = hd.avgProd30dWh ? Math.round(hd.avgProd30dWh / 1000) : null;
+  const useThreshold = hd.avgCons30dWh ?? null;
+  const avgConsThreshold = useThreshold ? Math.round(useThreshold / 1000) : null;
+  const vsY = showToday ? todayVsYesterday(rd, hd, Date.now()) : null;
+  const prodColor = showToday
+    ? (vsY ? (prodWh >= vsY.prodWh ? GREEN : ORANGE) : TODAY_NEUTRAL)
+    : (avgProdThreshold === null) ? GREY : (Math.round(prodWh / 1000) < avgProdThreshold ? ORANGE : GREEN);
+  const consColor = showToday
+    ? (vsY ? (consWh <= vsY.consWh ? GREEN : ORANGE) : TODAY_NEUTRAL)
+    : (avgConsThreshold === null) ? GREY : (Math.round(consWh / 1000) > avgConsThreshold ? ORANGE : GREEN);
+
+  // As-of time = end of the newest reading, like the medium widget.
+  const consFetchedAtMs = rd.consFetchedAt || rd.fetchedAt || 0;
+  const asOfMs = ((rd.prodFetchedAt || 0) >= consFetchedAtMs) ? rd.prod.lastEndMs : rd.cons.lastEndMs;
+  const tf = new DateFormatter();
+  tf.dateFormat = "h:mm a";
+
+  // ---- Title row: weather icon + widget title ----
+  const titleRow = w.addStack();
+  titleRow.layoutHorizontally();
+  titleRow.centerAlignContent();
+  if (weatherIcon) {
+    const isPeakSun = arrayProvesSun(weatherIcon, (rd.prod && typeof rd.prod.latestKw === "number") ? rd.prod.latestKw : null, pd.ceilingKw);
+    const sym = SFSymbol.named(isPeakSun ? weatherSymbolName("clear", true) : weatherIcon.symbolName);
+    sym.applyFont(Font.systemFont(13));
+    const iconImg = titleRow.addImage(sym.image);
+    iconImg.imageSize = new Size(15, 15);
+    iconImg.tintColor = new Color(isPeakSun ? "#ffd60a" : weatherIcon.colorHex);
+    titleRow.addSpacer(5);
+  }
+  // The small box has room for about 14 characters ("OverEngineered" is the longest), so a longer title is
+  // cut back to whole words that fit, and the font can be larger.
+  const SMALL_TITLE_MAX = 14;
+  let smallTitle = String(WIDGET_TITLE);
+  if (smallTitle.length > SMALL_TITLE_MAX) {
+    const cut = smallTitle.slice(0, SMALL_TITLE_MAX + 1).lastIndexOf(" ");
+    smallTitle = (cut > 0 ? smallTitle.slice(0, cut) : smallTitle.slice(0, SMALL_TITLE_MAX)).trim();
+  }
+  const title = titleRow.addText(smallTitle);
+  title.font = Font.mediumSystemFont(14);
+  title.textColor = new Color("#a8a8ad");
+  title.lineLimit = 1;
+  title.minimumScaleFactor = 0.8;
+  w.addSpacer(3);
+
+  // Fixed widths for the two sides of the row, so iOS never squeezes one side to make room for the other.
+  // Measured on the phone: "250" at 30 pt needs a bit over 60 pt, "Cons" at 8 pt needs a 29 pt box, so the
+  // right side uses the medium widget's Exp/Imp sizes (12 pt numbers, 8 pt labels) and leaves Prod 64 pt.
+  const SMALL_INNER_W = 134;
+  const SMALL_VAL_W = 37;
+  const SMALL_LABEL_W = 29;
+  const SMALL_RIGHT_W = SMALL_VAL_W + 4 + SMALL_LABEL_W;
+  const SMALL_PROD_W = SMALL_INNER_W - SMALL_RIGHT_W;
+  const prodText = kwh(prodWh);
+  const prodSize = SMALL_PROD_SIZE;
+
+  // ---- Top: Past 24 Hours ----
+  const lblRow = w.addStack();
+  lblRow.layoutHorizontally();
+  const lbl = lblRow.addText(showToday ? "Prod Today" : "Prod 24h");
+  lbl.font = Font.systemFont(9);
+  lbl.textColor = GREY;
+  lblRow.addSpacer();
+  const asOf = lblRow.addText(tf.string(new Date(asOfMs)));
+  asOf.font = Font.systemFont(9);
+  asOf.textColor = readingIsStale(rd, weatherIcon, Date.now()) ? ORANGE : GREY;
+  w.addSpacer(1);
+
+  // Production big on the left. On the right, a small column: Exp / Imp / Net, or Cons / Net.
+
+  const mainRow = w.addStack();
+  mainRow.layoutHorizontally();
+  mainRow.centerAlignContent();
+  const prodCol = mainRow.addStack();
+  prodCol.layoutVertically();
+  prodCol.size = new Size(SMALL_PROD_W, 0);
+  const prodVal = prodCol.addText(prodText);
+  prodVal.font = Font.boldSystemFont(prodSize);
+  prodVal.textColor = prodColor;
+  prodVal.lineLimit = 1;
+  const rightCol = mainRow.addStack();
+  rightCol.layoutVertically();
+  rightCol.size = new Size(SMALL_RIGHT_W, 0);
+  const rightLine = (valueText, label, color, size) => {
+    const line = rightCol.addStack();
+    line.layoutHorizontally();
+    line.bottomAlignContent();
+    const valBox = line.addStack();
+    valBox.size = new Size(SMALL_VAL_W, 0);
+    valBox.addSpacer();
+    const v = valBox.addText(valueText);
+    v.font = Font.mediumSystemFont(size);
+    v.textColor = color;
+    v.lineLimit = 1;
+    // 4 pt between the number and its label (2 looked cramped); the label box stays 29 (27 cut "Cons" off).
+    line.addSpacer(4);
+    const lblBox = line.addStack();
+    lblBox.size = new Size(SMALL_LABEL_W, 0);
+    const u = lblBox.addText(label);
+    u.font = Font.systemFont(8);
+    u.textColor = GREY;
+    u.lineLimit = 1;
+    lblBox.addSpacer();
+  };
+  const netColor = netKwh >= 0 ? GREEN : ORANGE;
+  if (gridFlow) {
+    rightLine(kwh(gridFlow.exportedWh), "Exp", GREEN, 12);
+    rightLine(kwh(gridFlow.importedWh), "Imp", ORANGE, 12);
+    rightLine(String(netKwh), "Net", netColor, 12);
+  } else {
+    rightLine(kwh(consWh), "Cons", consColor, 12);
+    rightCol.addSpacer(2);
+    rightLine(String(netKwh), "Net", netColor, 12);
+  }
+
+  w.addSpacer(3);
+  const div = w.addStack();
+  div.layoutHorizontally();
+  div.size = new Size(134, 1);
+  div.backgroundColor = new Color("#333336");
+  div.addSpacer(134);
+  w.addSpacer(4);
+
+  // ---- Bottom: the Array Status box (same as the medium's bottom right) ----
+  const serviceReqActive = hd.serviceReq === true;
+  const peakIsNeutral = !serviceReqActive &&
+    (pd.status.word === "Clean" || pd.status.word === "--" || pd.status.word === "Winter Sun");
+  const peakStatusDisplayColor = serviceReqActive ? RED : pd.status.color;
+  const arrayHeading = serviceReqActive ? "Service Required"
+    : pd.status.word === "Very Dirty" ? "Array Very Dirty"
+    : pd.status.word === "Dirty" ? "Array Dirty"
+    : pd.status.word === "Winter Sun" ? "Winter Sun"
+    : "Array Status";
+  const head = w.addStack();
+  head.layoutHorizontally();
+  const headLbl = head.addText(arrayHeading);
+  headLbl.font = Font.systemFont(9);
+  headLbl.textColor = peakIsNeutral ? GREY : peakStatusDisplayColor;
+  headLbl.lineLimit = 1;
+  w.addSpacer(3);
+
+  const latestKw = displayLatestKw(rd, weatherIcon, Date.now());
+  const hourlyKw = (rd.prod && Array.isArray(rd.prod.hourlyKw) && rd.prod.hourlyKw.length === HOURLY_BUCKET_COUNT)
+    ? rd.prod.hourlyKw : null;
+  const recentPeakKw = (rd.prod && typeof rd.prod.recentPeakKw === "number") ? rd.prod.recentPeakKw : latestKw;
+  const hoursSinceProdFetch = (typeof rd.prodFetchedAt === "number")
+    ? Math.max(0, Math.floor((Date.now() - rd.prodFetchedAt) / 3600000)) : 0;
+  const liveEndHourlyKw = (hourlyKw && latestKw !== null) ? hourlyKw.slice(0, -1).concat([latestKw]) : hourlyKw;
+  const shiftedHourlyKw = (hourlyKw && hoursSinceProdFetch > 0)
+    ? hourlyKw.slice(Math.min(hoursSinceProdFetch, HOURLY_BUCKET_COUNT))
+        .concat(new Array(Math.min(hoursSinceProdFetch, HOURLY_BUCKET_COUNT)).fill(0))
+    : liveEndHourlyKw;
+  const shiftedRecentPeakKw = hoursSinceProdFetch > 0 ? 0 : recentPeakKw;
+
+  const histRow = w.addStack();
+  histRow.layoutHorizontally();
+  histRow.centerAlignContent();
+  const peakCol = histRow.addStack();
+  peakCol.layoutVertically();
+  const peakNumText = pd.observedPeakKw !== null ? pd.observedPeakKw.toFixed(1) : "--";
+  const peakVal = peakCol.addText(peakNumText);
+  peakVal.font = Font.boldSystemFont(peakNumText.length <= 4 ? 22 : 20);
+  peakVal.textColor = peakStatusDisplayColor;
+  peakVal.lineLimit = 1;
+  const peakLbl = peakCol.addText("Max kW");
+  peakLbl.font = Font.systemFont(9);
+  peakLbl.textColor = GREY;
+  histRow.addSpacer();
+
+  if (hourlyKw) {
+    const histCeilingKw = (typeof pd.ceilingKw === "number" && pd.ceilingKw > 0) ? pd.ceilingKw : ARRAY_OBSERVED_MAX_KW;
+    const curveEndMs = ((typeof rd.prodFetchedAt === "number") ? rd.prodFetchedAt : Date.now()) + hoursSinceProdFetch * 3600000;
+    const midnightIndex = (HOURLY_BUCKET_COUNT - 0.5) - (curveEndMs - localMidnightMs(new Date(curveEndMs))) / 3600000;
+    const histImg = renderMicroLineChart(shiftedHourlyKw, histCeilingKw, 52, 24, shiftedRecentPeakKw,
+      { smooth: true, fill: true, skipZero: true, ticks: [midnightIndex], dimBefore: midnightIndex, dimAlpha: YESTERDAY_FADE });
+    const histWidget = histRow.addImage(histImg);
+    histWidget.imageSize = new Size(52, 24);
+  }
+  return w;
+}
+
 // ===== EXECUTION BOOTSTRAPPER =====
 // Which widget iOS is asking for. The Lock Screen sizes all start with "accessory"; only the wide one is drawn.
 const WIDGET_FAMILY = (config.runsInWidget && typeof config.widgetFamily === "string") ? config.widgetFamily : "";
 const IS_LOCK_SCREEN = WIDGET_FAMILY.indexOf("accessory") === 0;
 const IS_LOCK_TILE = WIDGET_FAMILY === "accessoryRectangular";
+const IS_SMALL = WIDGET_FAMILY === "small";
 let widget;
 try {
   if (!CFG) throw needsUserError("setup", SETTINGS.problem || "No settings yet.");
@@ -2383,7 +2988,7 @@ try {
 
   const peakCache = loadPeakCache();
   const rd = rollingResult && rollingResult.data ? rollingResult.data : null;
-  recordWeatherReading(weatherIcon, rd && rd.prod ? rd.prod.latestKw : null);
+  recordWeatherReading(weatherIcon, displayLatestKw(rd, weatherIcon, Date.now()));
   if (rd && rd.prod && rd.prod.maxKw !== undefined && rd.prod.totalWh !== undefined) {
     const now = new Date();
     const todayKey = dateStr(now);
@@ -2531,6 +3136,12 @@ try {
     const hdDbg = historyResult && historyResult.data ? historyResult.data : null;
     debugLines.push(`History fromCache: ${historyResult ? historyResult.fromCache : "null"}`);
     debugLines.push(`History estimatedBankWh (thru yesterday): ${hdDbg ? hdDbg.estimatedBankWh : "null"}`);
+    const byDbg = hdDbg ? hdDbg.bankYear : null;
+    debugLines.push(`Bank chart (setting ${SHOW_BANK_CHART ? "ON" : "off"}): ` + (byDbg && Array.isArray(byDbg.points)
+      ? `${byDbg.days} days of history in the last 12 months, ${byDbg.points.length - byDbg.firstIndex} of ${byDbg.points.length} points drawn (one every ${BANK_YEAR_STEP_DAYS} days), ` +
+        `top ${Math.round(byDbg.topWh / 1000)} kWh, low ${Math.round(byDbg.lowWh / 1000)} kWh, true-up month ${TRUE_UP_MONTH || "none"}` +
+        `, last points (kWh): ${byDbg.points.slice(-6).map((v) => Math.round(v / 1000)).join(", ")}`
+      : "no line (too little history or no bill date) -- original layout shown"));
     debugLines.push(`Bank trend: ${hdDbg && typeof hdDbg.avgNetTrendWh === "number"
       ? `${(hdDbg.avgNetTrendWh / 1000).toFixed(1)} kWh/day avg net over ${hdDbg.trendDaysUsed} of last ${BANK_TREND_WINDOW_DAYS} days -> ${String(bankTrendDir(hdDbg.avgNetTrendWh)).toUpperCase()} (flat inside +/-${BANK_TREND_BAND_KWH_PER_DAY})`
       : `no figure (needs ${BANK_TREND_MIN_DAYS}+ days of data, or history not refetched yet) -> no mark`}`);
@@ -2566,6 +3177,12 @@ try {
 
     const lockTx = lockTileTexts(rd, Date.now());
     debugLines.push(`Lock Screen widget would show: ${lockTx ? `Today ${lockTx.today} kWh (${lockTx.time || "no time"}) | Peak ${lockTx.peak} kW | Net ${lockTx.net} kWh | icon ${lockIconName(weatherIcon, rd, peakStats) || "none"}` : "No solar data yet"}`);
+    {
+      const hdx = historyResult && historyResult.data ? historyResult.data : {};
+      const vs = todayVsYesterday(rd, hdx, Date.now());
+      debugLines.push(`Today view (Parameter "today"${VIEW_TODAY ? ", ON for this widget" : ""}): yesterday's totals saved for ${hdx.lastDayDate || "none yet"}` +
+        (vs ? ` | yesterday up to this time: prod ${(vs.prodWh / 1000).toFixed(1)} kWh, cons ${(vs.consWh / 1000).toFixed(1)} kWh (Prod/Cons green when ahead)` : " | no comparison yet, so Prod/Cons show green"));
+    }
     debugLines.push(`Sunrise: ${weatherIcon && weatherIcon.sunriseMs ? new Date(weatherIcon.sunriseMs).toLocaleTimeString() : "null"}`);
     debugLines.push(`Sunset: ${weatherIcon && weatherIcon.sunsetMs ? new Date(weatherIcon.sunsetMs).toLocaleTimeString() : "null"}`);
 
@@ -2580,6 +3197,8 @@ try {
 
   widget = IS_LOCK_TILE
     ? createLockTile(rollingResult, weatherIcon, peakStats)
+    : IS_SMALL
+    ? await createSmallWidget(rollingResult, historyResult, peakStats, weatherIcon)
     : await createWidget(rollingResult, historyResult, peakStats, weatherIcon);
 
   const wakeIsSunUp = weatherIcon && typeof weatherIcon.isDay === "boolean"
@@ -2588,7 +3207,7 @@ try {
   // Ask iOS to run again when new data will exist, never sooner than 50 minutes ahead. iOS treats the time
   // as a hint and is often late.
   const wakeNowMs = Date.now();
-  const nextDueMs = nextMeterDueMs(rd, wakeIsSunUp);
+  const nextDueMs = nextMeterDueMs(rd, wakeIsSunUp, weatherIcon ? weatherIcon.sunsetMs : null);
   const dynamicTargetMs = nextDueMs !== null ? nextDueMs : wakeNowMs + (60 * 60 * 1000);
   const safeFloorMs = wakeNowMs + (50 * 60 * 1000);
   let dataWakeMs = Math.max(dynamicTargetMs, safeFloorMs);

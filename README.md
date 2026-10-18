@@ -2,7 +2,7 @@
 
 A Home Screen widget for the Scriptable app on iPhone, for use with Enphase® solar systems.
 
-<img src="images/widget.png" alt="The OverEngineered Solar widget" width="520">
+<img src="images/widget.png" alt="The OverEngineered Solar widget: the medium size on the left and the small size on the right" width="760">
 
 ## What this adds to the Enphase app
 
@@ -17,7 +17,7 @@ A Home Screen widget for the Scriptable app on iPhone, for use with Enphase® so
 
 For live power, per-panel detail and long-term history, tap the widget to open the Enphase app.
 
-Guide version 2026.10.12.1620. Written for widget 2026.10.12.1613, setup 2026.10.12.0749 and dev sandbox 2026.10.12.1617.
+Guide version 2026.10.17.2256. Written for widget 2026.10.16.0600, setup 2026.10.13.2245 and dev sandbox 2026.10.17.2249.
 
 **Everything here runs on your iPhone, inside the Scriptable app.** A computer is only useful for reading this guide and, if you like, creating the Enphase developer account.
 
@@ -31,16 +31,18 @@ Licensed under the PolyForm Noncommercial License 1.0.0. Personal and other nonc
 
 **Title row.** A weather icon for your location, your title, and the time of the newest data, which tells you how fresh the numbers are. The time turns orange if the last update failed, or in daylight if the newest reading is more than 2 hours old. When the array is running near its peak the icon is a bright sun, whatever the forecast says.
 
-**Past 24 Hours.** Production and consumption over the last 24 hours, in kWh. This is a rolling window ending now, not "since midnight", so on two similar days the numbers stay steady. Numbers under 10 show one decimal.
+**Prod 24h.** Production over the last 24 hours as the big number, with consumption (Cons) and Net beside it, all in kWh. This is a rolling window ending now, not "since midnight", so on two similar days the numbers stay steady. Numbers under 10 show one decimal.
+- Net is production minus consumption over the same 24 hours: green at zero or above, orange below.
+- **Today view (optional).** Long-press the widget, choose **Edit Widget**, and type `today` in the Parameter box. That widget's numbers then count from midnight, under the heading "Prod Today". Prod is green when it is ahead of yesterday at the same time, and Cons is green when it is under yesterday at the same time; early each morning, before yesterday's totals are saved, they show green. Leave the box empty for the past 24 hours. Works on the medium and small sizes, so you can have one of each.
 - Prod is green when it is at or above your 30-day average production, orange when below.
 - Cons is green when it is at or below your 30-day average consumption, orange when above.
 - With "Show Exported / Imported" switched on in setup, Cons is replaced by two smaller numbers: **Exp**, the energy you sent to the grid, and **Imp**, the energy you took from it. They are worked out by comparing production and consumption every 15 minutes, so they read a little lower than your utility's meter. They need consumption meters, and with a home battery they are not your grid numbers, because the battery sits in between.
 
-**30-Day Avg Prod.** Your average daily production over the last 30 days, with a 30-day trend line. Green means you are producing at least as much as you use, on average.
+**30d Prod vs Use.** Your average daily production over the last 30 days, in kWh a day, with each of those 30 days in the small box on the right. Green means you are producing at least as much as you use, on average. In the box, the dashed line is your average daily use: days above it are green, days below it orange. A small dot on the bottom edge marks the 1st of the month.
 
-**Banked Credits.** Your running net-metering balance in kWh: the balance from your last bill, plus everything produced minus everything consumed since then.
-- The small mark after the label shows which way the bank has been heading over the last 28 days: a green up triangle (adding more than about 5 kWh a day), an orange down triangle (drawing down more than about 5 kWh a day), or a grey dash (roughly flat).
-- "Net" is production minus consumption for the same rolling 24 hours shown at the top left.
+**Banked Credits.** Your running net-metering balance in kWh (shown under the number when the bank chart is on): the balance from your last bill, plus everything produced minus everything consumed since then.
+- With the bank chart switched off, today's Net also shows beside the balance.
+- The small chart on the right (the "12-month bank chart" setting, on unless you switch it off) is your bank over the last 12 months, one point every two weeks. The top of the box is the highest balance in those 12 months, and it moves by itself as months roll by. The dotted line is today's balance, so it meets the right end of the line. Small dots along the bottom edge mark the start of each quarter (Jan, Apr, Jul and Oct 1). It shows whether your credits are still growing or being drawn down for the winter. From your bill date on it uses the same numbers as the balance; before that it is worked back from the bill, so it shows the shape rather than exact past balances, and it starts from zero after your true-up month. Months before your system's turn-on date are left blank, so on a young system the line starts part way across. It makes no extra Enphase requests.
 - The balance keeps moving day and night. What the house uses overnight comes off it as the night goes on, not all at once after sunrise.
 - If the estimate goes below zero the label reads "Credit Deficit".
 - Your utility's meter is the one you're billed on, so the bill is the true number. Enphase's meters can differ from it by about 2% of a month's usage. If you go back into setup and update your bank balance from your bill periodically, it will track pretty closely.
@@ -48,8 +50,8 @@ Licensed under the PolyForm Noncommercial License 1.0.0. Personal and other nonc
 - If your utility does not bank kWh one for one (net billing, such as California NEM 3), switch off "My utility banks kWh credits" in setup. The box is then labelled "Net Since" with your chosen date, and shows production minus consumption since that day.
 
 **Array Status.** A health check and a chart.
-- The chart is the last 24 hours of production. The right end is your current power. The dashed line marks the highest reading in the last hour.
-- The number is your array's peak power across the last five clear days. The label under it compares that peak to what your array should put out on a clear day, as a read on how clean the panels are: **Max Power** (as expected), **Dirty** or **Very Dirty** (the peak has dropped; the panels may need washing), **Winter Sun** (the sun is too low to judge, so the number holds its last real value until spring), or **Service Req** (Enphase is reporting a hardware fault).
+- The chart is the last 24 hours of production. The right end is your current power. The dashed line marks the highest reading in the last hour. The small dot on the bottom edge is midnight, so you can see where today started; yesterday's part of the curve, left of it, is drawn faded.
+- The number, "Max kW", is your array's peak power across the last five clear days. It is compared with what your array should put out on a clear day, as a read on how clean the panels are. When all is well the heading reads **Array Status** and the number is green. When something is off, the heading changes and takes the number's colour: **Array Dirty** or **Array Very Dirty** (the peak has dropped; the panels may need washing), **Winter Sun** (the sun is too low to judge, so the number holds its last real value until spring), or **Service Required** (Enphase is reporting a hardware fault).
 
 Tap the widget to open the Enphase app. Scriptable shows for a moment on the way; that is how iOS handles a widget tap.
 
@@ -134,6 +136,7 @@ In Scriptable, tap **OverEngineered Solar Setup** in the script list to run it. 
 | My utility banks kWh credits | Leave on for one-for-one net metering. Switch off for net billing, such as California NEM 3; setup then asks only for a date to count from. |
 | Banked credits | The kWh balance and date from your most recent bill, or 0. |
 | True-up month | The month your utility resets banked credits. |
+| 12-month bank chart | On shows a small 12-month line of your bank beside the balance, with Net moved up beside the mark. Off shows the original layout. |
 | Enphase shows consumption | On if the Enphase app shows consumption, not just production. |
 | Show Exported / Imported | Off shows Cons. On shows energy sent to the grid and taken from it in its place. |
 | Title | The name shown on the widget. |
@@ -141,6 +144,14 @@ In Scriptable, tap **OverEngineered Solar Setup** in the script list to run it. 
 With neither a ZIP code nor a latitude and longitude, setup asks you to tap Save a second time. All the solar numbers still work. You lose the weather icon and the dirty-panel warning, which needs your location to tell dirt from a low winter sun.
 
 Run setup again any time to change a setting. It opens straight to the form with no login. The usual reason is a new banked-credit balance from a bill.
+
+### Small widget (optional)
+
+The same script also has a Small size, for when you want the key numbers in a quarter of the space. Add a Scriptable widget at the Small size and pick **OverEngineered Solar** as the script, the same way as the medium one. You can also resize the medium widget while editing your Home Screen; it switches layouts on its own.
+
+It shows production for the past 24 hours as one big number, with Cons (or Exp and Imp) and Net beside it, and the Array Status box underneath. The colours mean the same as on the medium widget. A long title is shortened to the whole words that fit in about 14 characters, so "OverEngineered Solar" shows as "OverEngineered".
+
+It uses the same data as the medium widget, so the two always agree, and it makes no extra Enphase requests of its own.
 
 ### Lock Screen widget (optional)
 
@@ -192,7 +203,7 @@ Enphase also publishes each 15-minute reading before it is complete, and takes a
 - It plans each month to about 950 requests and refuses to go past 990, leaving a margin under the limit.
 - Nothing is requested between 10 PM and 5 AM.
 - If Enphase's data stops updating for a while, the widget checks about once an hour instead of on every run, so it never burns through the day waiting.
-- Production is requested about hourly while the sun is up.
+- Production is requested about hourly while the sun is up, plus one request about 30 minutes after sunset to pick up the evening's last readings.
 - Consumption is requested every two hours, and hourly near the start and end of the day when the month has requests to spare.
 - Daily totals and the fault check are requested once a day.
 - Opening the script by hand only uses spare requests. If there are none, it shows saved data.
