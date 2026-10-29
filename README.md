@@ -4,6 +4,8 @@ A Home Screen widget for the Scriptable app on iPhone, for use with Enphase® so
 
 <img src="images/widget.png" alt="The OverEngineered Solar widget: the medium size on the left and the small size on the right" width="760">
 
+I knew it worked when I stopped opening the Enphase app every day to check on my solar. That's what a widget is supposed to be for.
+
 ## What this adds to the Enphase app
 
 - **On your Home Screen.** No app to open and wait for. The numbers are just there.
@@ -17,7 +19,7 @@ A Home Screen widget for the Scriptable app on iPhone, for use with Enphase® so
 
 For live power, per-panel detail and long-term history, tap the widget to open the Enphase app.
 
-Guide version 2026.10.17.2256. Written for widget 2026.10.16.0600, setup 2026.10.13.2245 and dev sandbox 2026.10.17.2249.
+Guide version 2026.10.29.1150. Written for widget 2026.10.28.1117, setup 2026.10.28.0956 and dev sandbox 2026.10.29.1150.
 
 **Everything here runs on your iPhone, inside the Scriptable app.** A computer is only useful for reading this guide and, if you like, creating the Enphase developer account.
 
@@ -31,6 +33,8 @@ Licensed under the PolyForm Noncommercial License 1.0.0. Personal and other nonc
 
 **Title row.** A weather icon for your location, your title, and the time of the newest data, which tells you how fresh the numbers are. The time turns orange if the last update failed, or in daylight if the newest reading is more than 2 hours old. When the array is running near its peak the icon is a bright sun, whatever the forecast says.
 
+**Four boxes.** On the medium widget, Prod 24h is top left, 30d Prod vs Use is top right, Array Status is bottom left and Banked Credits is bottom right.
+
 **Prod 24h.** Production over the last 24 hours as the big number, with consumption (Cons) and Net beside it, all in kWh. This is a rolling window ending now, not "since midnight", so on two similar days the numbers stay steady. Numbers under 10 show one decimal.
 - Net is production minus consumption over the same 24 hours: green at zero or above, orange below.
 - **Today view (optional).** Long-press the widget, choose **Edit Widget**, and type `today` in the Parameter box. That widget's numbers then count from midnight, under the heading "Prod Today". Prod is green when it is ahead of yesterday at the same time, and Cons is green when it is under yesterday at the same time; early each morning, before yesterday's totals are saved, they show green. Leave the box empty for the past 24 hours. Works on the medium and small sizes, so you can have one of each.
@@ -41,6 +45,7 @@ Licensed under the PolyForm Noncommercial License 1.0.0. Personal and other nonc
 **30d Prod vs Use.** Your average daily production over the last 30 days, in kWh a day, with each of those 30 days in the small box on the right. Green means you are producing at least as much as you use, on average. In the box, the dashed line is your average daily use: days above it are green, days below it orange. A small dot on the bottom edge marks the 1st of the month.
 
 **Banked Credits.** Your running net-metering balance in kWh (shown under the number when the bank chart is on): the balance from your last bill, plus everything produced minus everything consumed since then.
+- It follows your bills. Setup asks for your bill day of the month. On each bill day, a balance below zero goes back to zero; a balance above zero stays. On the bill day of your true-up month, any credits left over are forfeited, so the balance goes to zero. A short month uses its last day. If you don't give a bill day, the widget uses the day of the bill date you entered. This is the usual rule, but it has not yet been checked through a real true-up month, so check the number against your bill.
 - With the bank chart switched off, today's Net also shows beside the balance.
 - The small chart on the right (the "12-month bank chart" setting, on unless you switch it off) is your bank over the last 12 months, one point every two weeks. The top of the box is the highest balance in those 12 months, and it moves by itself as months roll by. The dotted line is today's balance, so it meets the right end of the line. Small dots along the bottom edge mark the start of each quarter (Jan, Apr, Jul and Oct 1). It shows whether your credits are still growing or being drawn down for the winter. From your bill date on it uses the same numbers as the balance; before that it is worked back from the bill, so it shows the shape rather than exact past balances, and it starts from zero after your true-up month. Months before your system's turn-on date are left blank, so on a young system the line starts part way across. It makes no extra Enphase requests.
 - The balance keeps moving day and night. What the house uses overnight comes off it as the night goes on, not all at once after sunrise.
@@ -49,9 +54,10 @@ Licensed under the PolyForm Noncommercial License 1.0.0. Personal and other nonc
 - With a home battery, some energy is lost passing through it, so this number and Net read a little high.
 - If your utility does not bank kWh one for one (net billing, such as California NEM 3), switch off "My utility banks kWh credits" in setup. The box is then labelled "Net Since" with your chosen date, and shows production minus consumption since that day.
 
-**Array Status.** A health check and a chart.
+**Array Status.** A health check and a chart. It sits at the bottom left of the medium widget.
+- The heading line reads **Status:** and then today's production so far, for example "Status: 101 kWh". The figure is green when you are ahead of yesterday at the same time and orange when you are behind (green until yesterday's totals are saved). When something is off, a word goes in front of the figure and the figure takes the word's colour: **Dirty** (orange: the peak has dropped a little, and the panels may need washing), **Dirty** in red (the peak has dropped a lot), **Winter** (the sun is too low to judge, so the number holds its last real value until spring) or **Service Required** (red, with no figure: Enphase is reporting a hardware fault).
 - The chart is the last 24 hours of production. The right end is your current power. The dashed line marks the highest reading in the last hour. The small dot on the bottom edge is midnight, so you can see where today started; yesterday's part of the curve, left of it, is drawn faded.
-- The number, "Max kW", is your array's peak power across the last five clear days. It is compared with what your array should put out on a clear day, as a read on how clean the panels are. When all is well the heading reads **Array Status** and the number is green. When something is off, the heading changes and takes the number's colour: **Array Dirty** or **Array Very Dirty** (the peak has dropped; the panels may need washing), **Winter Sun** (the sun is too low to judge, so the number holds its last real value until spring), or **Service Required** (Enphase is reporting a hardware fault).
+- The number, "Max kW", is your array's peak power across the last five clear days. It is compared with what your array should put out on a clear day, as a read on how clean the panels are. The number is always green; the heading line above it carries the colour.
 
 Tap the widget to open the Enphase app. Scriptable shows for a moment on the way; that is how iOS handles a widget tap.
 
@@ -135,6 +141,7 @@ In Scriptable, tap **OverEngineered Solar Setup** in the script list to run it. 
 | Outside the US | Leave ZIP code empty and enter your latitude and longitude here as two plain numbers, latitude first, such as `51.51, -0.13`. South and west are negative. Any maps app can give them, and a rough location is fine. This has not been tested outside the US yet. |
 | My utility banks kWh credits | Leave on for one-for-one net metering. Switch off for net billing, such as California NEM 3; setup then asks only for a date to count from. |
 | Banked credits | The kWh balance and date from your most recent bill, or 0. |
+| Bill day of the month | The day of the month your utility bill usually arrives (1 to 31). The Banked Credits number follows your bills from this day. |
 | True-up month | The month your utility resets banked credits. |
 | 12-month bank chart | On shows a small 12-month line of your bank beside the balance, with Net moved up beside the mark. Off shows the original layout. |
 | Enphase shows consumption | On if the Enphase app shows consumption, not just production. |
@@ -171,7 +178,7 @@ It shows three numbers, all counted from midnight: **Today** (energy produced so
 
 The Lock Screen widget counts from midnight. The Home Screen widget shows the last 24 hours, so the two will differ, most of all in the morning. The Lock Screen Net is how much today has added to, or taken from, your bank.
 
-Peak on the Lock Screen is the highest power reached today. The kW number on the Home Screen widget is different: it is what your array reaches on a clear day, taken from the last five clear days, and it is what the Max Power and Dirty labels are judged against.
+Peak on the Lock Screen is the highest power reached today. The kW number on the Home Screen widget is different: it is the best peak your array reached in the last five clear days (a bright day with thin high cloud counts too, if its peak is a new best), and it is what the Max Power and Dirty labels are judged against.
 
 A tap on it opens the Enphase app, the same as the Home Screen widget. It asks iOS for a refresh about every 15 minutes during the day, so it keeps up with the Home Screen widget. Those refreshes only redraw the saved numbers; they make no Enphase requests.
 
@@ -230,6 +237,40 @@ If something looks wrong, open Scriptable and tap the widget script to run it. I
 
 This isn't my full-time job, so I have little time to make updates, and the widget is shared as it is. I would still love to hear if it helped you as much as it helped me, or if you think this is what Enphase should build. Open an issue on GitHub to tell me. It doesn't have to be a problem.
 
+**Why isn't this in the App Store?** Because then I'd have to maintain it, and I'm much happier over-engineering things than supporting them. So it stays free and runs on your own free Enphase developer account. If it made your day a little easier, [buy me a coffee](https://buymeacoffee.com/overengineeredtech) and I'll turn it into something else to over-engineer! ;)
+
 This widget is free and always will be for personal use. If it's useful to you and you'd like to say thanks, you can buy me a coffee: [buymeacoffee.com/overengineeredtech](https://buymeacoffee.com/overengineeredtech)
 
 <img src="images/support-qr.png" alt="QR code for the Buy Me a Coffee page" width="160">
+
+## Appendix: Example days
+
+Each picture is a different day, drawn with made-up numbers, to show what the colours mean. Green means on track, orange means behind, and red means something needs attention.
+
+<img src="images/example-1-sunny-afternoon.png" alt="A sunny afternoon, all numbers green" width="520">
+
+**A good day.** A sunny afternoon. Production is above your 30-day average and ahead of yesterday at this time, so every number is green. "Status: 101 kWh" is today's production so far.
+
+<img src="images/example-2-cloudy-afternoon.png" alt="A cloudy afternoon, some numbers orange" width="520">
+
+**A cloudy day.** The last 24 hours (74) is under your 30-day average, so that number and Net are orange. Today's 52.0 kWh is behind yesterday at this time, so it is orange too. Nothing is wrong with the array; it is just a dull day.
+
+<img src="images/example-3-morning.png" alt="A morning, the 24-hour number orange and today's figure green" width="520">
+
+**Morning.** Early in the day the last 24 hours (38) is under your 30-day average, so it is orange. Today so far (18.0 kWh) is ahead of yesterday at this time, so it is green.
+
+<img src="images/example-4-winter-dawn.png" alt="A winter dawn, Status: Winter 0.0 kWh" width="520">
+
+**Winter dawn.** Before sunrise in winter. "Winter" means the sun is too low to judge the panels, so Max kW holds its last real value (23.9) until spring. Today's figure is 0.0 kWh because the sun has not come up. The last 24 hours and Net are orange because winter days make less than your 30-day average.
+
+<img src="images/example-5-dirty.png" alt="Status: Dirty in orange" width="520">
+
+**Dirty.** The array's peak has dropped a little (21.6 kW, against about 24 on a clear day). The heading says Dirty in orange and today's figure turns the same orange. The panels may need washing.
+
+<img src="images/example-6-very-dirty.png" alt="Status: Dirty in red" width="520">
+
+**Very dirty.** The peak has dropped a lot (19.8 kW). The word and the figure turn red. The panels very likely need washing.
+
+<img src="images/example-7-service-required.png" alt="Status: Service Required in red" width="520">
+
+**Service Required.** Enphase is reporting a hardware fault, such as a failed microinverter or meter. The heading turns red and shows no figure. Open the Enphase app to see which part.

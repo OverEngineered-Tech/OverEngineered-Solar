@@ -1,5 +1,5 @@
 
-// [2026.10.17.2249] OverEngineered Dev Sandbox
+// [2026.10.29.1150] OverEngineered Dev Sandbox
 /*
  * OverEngineered Solar: dev sandbox
  * Required Notice: Copyright (c) 2026 OverEngineered-Tech
@@ -16,7 +16,7 @@
 // would otherwise wait months for: a dirty array, a deficit, a winter day, a fault.
 //
 // HOW IT IS LAID OUT
-// Everything down to the line "===== SANDBOX =====" is the widget's own code (widget 2026.10.16.0600),
+// Everything down to the line "===== SANDBOX =====" is the widget's own code (widget 2026.10.28.1117),
 // copied in by a build script, so what you see here is drawn exactly the way the real widget draws it.
 // The part to play with is below that line: a table of made-up days, and the code that turns each row
 // into the numbers the widget expects.
@@ -31,7 +31,7 @@
 // ===== SETTINGS: read from the file the setup script writes =====
 
 // Shown in the debug report. Keep it the same as the stamp on the first line.
-const WIDGET_VERSION = "2026.10.16.0600";
+const WIDGET_VERSION = "2026.10.28.1117";
 
 const fm = { documentsDirectory: () => "", joinPath: (a, b) => a + "/" + b, fileExists: () => false,
   readString: () => null, writeString: () => {}, createDirectory: () => {}, remove: () => {} };
@@ -77,7 +77,7 @@ let SHOW_EXPORTED_IMPORTED = false;
 let WIDGET_TITLE = "OverEngineered Solar";
 const LIFETIME_START_DATE = CFG ? CFG.lifetimeStartDate : "2026-01-01";
 // Bump this when the saved history changes shape. Saved history from another version is fetched again.
-const SCRIPT_VERSION = 11;
+const SCRIPT_VERSION = 12;
 
 const BANK_BASELINE_KWH = (CFG && typeof CFG.bankBaselineKwh === "number") ? CFG.bankBaselineKwh : 0;
 
@@ -91,6 +91,20 @@ let BANKS_KWH_CREDITS = true;
 // The month the utility resets banked credits (1 to 12), from setup. Used only to draw the 12-month bank line.
 const TRUE_UP_MONTH = (CFG && Number.isInteger(CFG.trueUpMonth) && CFG.trueUpMonth >= 1 && CFG.trueUpMonth <= 12)
   ? CFG.trueUpMonth : null;
+// The day of the month the utility bill usually arrives (1 to 31), from setup. With a kWh bank the Banked number
+// follows the bills: on each bill day a bank below zero goes back to zero (a positive bank stays), and on the bill
+// day of the true-up month the utility keeps any credits left over, so the bank goes to zero. A short month uses
+// its last day. A settings file saved before this field existed falls back to the day of the entered bill date.
+// With neither, the Banked number is the plain running sum it was before.
+function validBillDay(d) { return Number.isInteger(d) && d >= 1 && d <= 31; }
+const BILL_DAY_FROM_SETUP = (CFG && validBillDay(CFG.billDay)) ? CFG.billDay : null;
+const BILL_DAY_FROM_DATE = (() => {
+  const m = /^\d{4}-\d{2}-(\d{2})$/.exec(String((CFG && CFG.bankBaselineDate) || ""));
+  const d = m ? parseInt(m[1], 10) : null;
+  return validBillDay(d) ? d : null;
+})();
+const BILL_DAY = BILL_DAY_FROM_SETUP !== null ? BILL_DAY_FROM_SETUP : BILL_DAY_FROM_DATE;
+const BILL_DAY_SOURCE = BILL_DAY_FROM_SETUP !== null ? "setup" : (BILL_DAY_FROM_DATE !== null ? "bill date" : "none");
 // On (setup switch "12-month bank chart", on by default, and on for older settings files without it): the bank
 // box shows today's Net beside the trend mark and a small 12-month bank line on the right. Off: the original layout.
 const SHOW_BANK_CHART = !(CFG && CFG.showBankChart === false);
@@ -102,7 +116,8 @@ const SUN_ICON_PEAK_RATIO = 0.85;
 const SHOW_LATEST_KW = false;
 
 // ===== PEAK POWER & DIRTY-PANEL CHECK =====
-// Keeps the last five clear-day peaks and shows the second highest, so one freak reading can't fool it.
+// Keeps the last five clear-day peaks and shows the highest, so it matches the peak the Enphase app shows.
+// A freak reading is limited by the glitch ceiling below and falls out of the list after five days.
 // A peak that falls on clear days most likely means dirt.
 //
 // Panels fade a little every year. The ceiling fades with them so aging isn't read as dirt.
@@ -504,16 +519,25 @@ const CHART_MARKER_ALPHA = 0.16;
 // One point every two weeks (27 across a year). At 58 points wide, weekly points sat about one per pixel and
 // drew weather wobble, not the shape; on a small or break-even array that wobble could fill the box.
 const BANK_YEAR_STEP_DAYS = 14;
-function buildBankYear(prodDays, consDays, startDateStr, baselineWh, baselineDateStr, trueUpMonth, banksKwh) {
+function buildBankYear(prodDays, consDays, startDateStr, baselineWh, baselineDateStr, trueUpMonth, banksKwh, billDay) {
   try {
     const n = Math.min(prodDays.length, consDays.length);
     if (!(n >= 2)) return null;
     const net = (i) => (prodDays[i] > 0 && consDays[i] > 0) ? prodDays[i] - consDays[i] : 0;
     const start = new Date(startDateStr + "T00:00:00Z");
     if (isNaN(start.getTime())) return null;
+    // With a bill day: the true-up forfeit is the bill day of the true-up month, and every other bill day
+    // sends a negative bank back to zero (same rules as the Banked number). Without one: the old 1st of the month.
+    const useBills = !!banksKwh && validBillDay(billDay) && Number.isInteger(trueUpMonth) && trueUpMonth >= 1 && trueUpMonth <= 12;
+    const billOn = (i) => {
+      const d = new Date(start.getTime() + i * 86400000);
+      const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      return d.getUTCDate() === Math.min(billDay, last);
+    };
     const isResetDay = (i) => {
       if (!banksKwh || !trueUpMonth) return false;
       const d = new Date(start.getTime() + i * 86400000);
+      if (useBills) return billOn(i) && d.getUTCMonth() + 1 === trueUpMonth;
       return d.getUTCDate() === 1 && d.getUTCMonth() + 1 === trueUpMonth;
     };
     let a = daysBetweenDateStrs(startDateStr, baselineDateStr);
@@ -522,13 +546,21 @@ function buildBankYear(prodDays, consDays, startDateStr, baselineWh, baselineDat
     const bank = new Array(n);
     let v = baselineWh;
     if (a >= 0) bank[a] = v;
-    for (let i = a + 1; i < n; i++) { v += net(i); bank[i] = v; }
+    for (let i = a + 1; i < n; i++) {
+      v += net(i);
+      if (useBills && billOn(i)) {
+        if (isResetDay(i)) v = 0;
+        else if (v < 0) v = 0;
+      }
+      bank[i] = v;
+    }
     let reset = -1;
     for (let i = a - 1; i >= 0; i--) {
       if (isResetDay(i + 1)) { reset = i + 1; break; }
       bank[i] = bank[i + 1] - net(i + 1);
     }
     if (reset > 0) {
+      if (useBills && reset < a) bank[reset] = 0;
       let u = 0;
       for (let i = 0; i < reset; i++) {
         if (i > 0 && isResetDay(i)) u = 0;
@@ -555,6 +587,46 @@ function buildBankYear(prodDays, consDays, startDateStr, baselineWh, baselineDat
     if (firstIndex === -1 || points.length - firstIndex < 2) return null;
     if (!points.every((x) => isFinite(x)) || !isFinite(topWh) || !isFinite(lowWh)) return null;
     return { points, firstIndex, topWh: Math.round(topWh), lowWh: Math.round(lowWh), days: n - first };
+  } catch (e) {
+    return null;
+  }
+}
+
+// The Banked number with the utility's rules: the balance from the bill, plus the net of each full day after the
+// bill date (a day counts only if both meters have a reading, as everywhere else). On each bill day a bank below
+// zero goes back to zero; a positive bank stays. On the bill day of the true-up month the utility keeps whatever
+// is left, so the bank goes to zero. A bill day past the end of a short month falls on that month's last day.
+// Works on copies and writes nothing, so a bad input only means "no answer": returns null and the caller keeps the
+// plain running sum. Otherwise { bankWh, lastReset: { date, kind, fromWh } | null }.
+function bankAfterBills(prodDays, consDays, startDateStr, baselineWh, baselineDateStr, billDay, trueUpMonth, banksKwh) {
+  try {
+    if (!banksKwh || !validBillDay(billDay)) return null;
+    if (!Number.isInteger(trueUpMonth) || trueUpMonth < 1 || trueUpMonth > 12) return null;
+    if (typeof baselineWh !== "number" || !isFinite(baselineWh)) return null;
+    const n = Math.min(prodDays.length, consDays.length);
+    const start = new Date(startDateStr + "T00:00:00Z");
+    if (isNaN(start.getTime())) return null;
+    const a = daysBetweenDateStrs(startDateStr, baselineDateStr);
+    if (!isFinite(a) || a < 0) return null;
+    let v = baselineWh;
+    let lastReset = null;
+    for (let i = a + 1; i < n; i++) {
+      const p = prodDays[i], c = consDays[i];
+      if (p > 0 && c > 0) v += p - c;
+      const d = new Date(start.getTime() + i * 86400000);
+      const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      if (d.getUTCDate() !== Math.min(billDay, last)) continue;
+      const when = d.toISOString().slice(0, 10);
+      if (d.getUTCMonth() + 1 === trueUpMonth) {
+        lastReset = { date: when, kind: "true-up", fromWh: v };
+        v = 0;
+      } else if (v < 0) {
+        lastReset = { date: when, kind: "monthly", fromWh: v };
+        v = 0;
+      }
+    }
+    if (!isFinite(v)) return null;
+    return { bankWh: v, lastReset };
   } catch (e) {
     return null;
   }
@@ -1372,6 +1444,7 @@ async function getHistoryStats(accessToken) {
     cached.data.bankBaselineKwh === BANK_BASELINE_KWH &&
     cached.data.bankBaselineDate === BANK_BASELINE_DATE &&
     cached.data.trueUpMonth === TRUE_UP_MONTH &&
+    cached.data.billDay === BILL_DAY &&
     !cached.data.debugInfo;
 
   if (cacheIsFresh && cacheHasExpectedFields) {
@@ -1473,9 +1546,13 @@ async function getHistoryStats(accessToken) {
     const sinceBaselineCons = baselineOffsetDays < 0 ? [] : consDays.slice(baselineOffsetDays + 1);
     const sinceBaselineNets = buildPairedNets(sinceBaselineProd, sinceBaselineCons);
     const netSinceBaselineWh = sinceBaselineNets.reduce((sum, v) => sum + v, 0);
-    const estimatedBankWh = (BANK_BASELINE_KWH * 1000) + netSinceBaselineWh;
+    const plainBankWh = (BANK_BASELINE_KWH * 1000) + netSinceBaselineWh;
+    // With a bill day the bank follows the bills (see bankAfterBills); with no usable answer it stays the plain sum.
+    const billRule = bankAfterBills(prodDays, consDays, LIFETIME_START_DATE, BANK_BASELINE_KWH * 1000,
+      BANK_BASELINE_DATE, BILL_DAY, TRUE_UP_MONTH, BANKS_KWH_CREDITS);
+    const estimatedBankWh = billRule ? billRule.bankWh : plainBankWh;
     const bankYear = buildBankYear(prodDays, consDays, LIFETIME_START_DATE, BANK_BASELINE_KWH * 1000,
-      BANK_BASELINE_DATE, TRUE_UP_MONTH, BANKS_KWH_CREDITS);
+      BANK_BASELINE_DATE, TRUE_UP_MONTH, BANKS_KWH_CREDITS, BILL_DAY);
 
     const todayProdRaw = rawProdDays[completeDays];
     const todayConsRaw = rawConsDays[completeDays];
@@ -1506,6 +1583,14 @@ async function getHistoryStats(accessToken) {
       estimatedBankWh,
       bankYear,
       trueUpMonth: TRUE_UP_MONTH,
+      billDay: BILL_DAY,
+      bankRule: {
+        on: !!billRule,
+        billDay: BILL_DAY,
+        source: BILL_DAY_SOURCE,
+        lastReset: billRule ? billRule.lastReset : null,
+        plainWh: plainBankWh,
+      },
       todayProdWhFromHistory: todayProdRaw !== undefined ? todayProdRaw : null,
       todayConsWhFromHistory: todayConsRaw !== undefined ? todayConsRaw : null,
       // Yesterday's whole-day totals, for the Today view's "ahead of yesterday at this time" colours.
@@ -1529,7 +1614,7 @@ async function getHistoryStats(accessToken) {
 // ===== UI CANVAS & DRAWING HELPERS =====
 
 const GREEN = new Color("#4cae66");
-const ORANGE = new Color("#e8935a");
+const ORANGE = new Color("#c98a45");
 // The worst states (Very Dirty, Service Req): a lighter red-orange, not a harsh red (Tim's preference).
 const RED = new Color("#f2725f");
 const GREY = new Color("#bcbcc0");
@@ -1889,12 +1974,19 @@ function savePeakCache(data) {
 }
 
 // Is today a clear day worth recording? Each test is explained with its constant near the top.
-function evaluateGate1(now, maxKw, totalWh, weatherIcon) {
+function evaluateGate1(now, maxKw, totalWh, weatherIcon, peakCache) {
   if (now.getHours() < PEAK_EVAL_AFTER_HOUR) return { admit: false, reason: "too early in the day" };
   if (!weatherIcon || typeof weatherIcon.weatherCode !== "number") return { admit: false, reason: "no weather data" };
-  if (weatherIcon.weatherCode > GATE1_MAX_CLEAR_WEATHER_CODE) return { admit: false, reason: "weather not clear enough" };
+  // A high peak can't be a false alarm, only low peaks can. So a peak at or above the saved highest (called P2
+  // in the code) skips the weather test. It needs one saved peak. The energy test below still applies.
+  let highPeakBypass = false;
+  if (weatherIcon.weatherCode > GATE1_MAX_CLEAR_WEATHER_CODE) {
+    const p2 = peakCache ? p2PeakKw(peakCache) : null;
+    if (p2 === null || !(maxKw >= p2)) return { admit: false, reason: "weather not clear enough" };
+    highPeakBypass = true;
+  }
   if (!(maxKw > 0) || !(totalWh >= maxKw * GATE1_PSH_MULTIPLIER)) return { admit: false, reason: "energy ratio too low" };
-  return { admit: true, reason: "clear day" };
+  return { admit: true, reason: highPeakBypass ? "high peak, weather not clear" : "clear day" };
 }
 
 // Adds today's peak to the list (one entry per day, highest value wins) and drops the oldest past five.
@@ -1917,11 +2009,12 @@ function recordFifoPeak(peakCache, dateKey, peakKw, gate1) {
   }
 }
 
-// Second highest of the saved peaks.
+// Highest of the saved peaks. (Named p2 because it was the second highest until 2026-10-19; the name is kept so
+// every place that uses it stays the same.)
 function p2PeakKw(peakCache) {
-  if (!peakCache.peaks || peakCache.peaks.length < 2) return null;
+  if (!peakCache.peaks || peakCache.peaks.length < 1) return null;
   const sorted = peakCache.peaks.map((p) => p.peak).sort((a, b) => b - a);
-  return sorted[1];
+  return sorted[0];
 }
 
 // The ceiling today: the baseline, faded for the time since it was set.
@@ -2342,8 +2435,27 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
 
   const topRow = body.addStack();
   topRow.layoutHorizontally();
+  body.addSpacer(2);
+  addDivider(body);
+  body.addSpacer(3);
+  const bottomRow = body.addStack();
+  bottomRow.layoutHorizontally();
+  // Where the four boxes sit: top-left, top-right, bottom-left, bottom-right.
+  const q4Order = ["today", "trend", "life", "bank"];
+  const q4Slots = {};
+  const q4Pair = (row, a, b, dividerH) => {
+    q4Slots[a] = row.addStack();
+    row.addSpacer(14);
+    const vd = row.addStack();
+    vd.size = new Size(1, dividerH);
+    vd.backgroundColor = new Color("#333336");
+    row.addSpacer(14);
+    q4Slots[b] = row.addStack();
+  };
+  q4Pair(topRow, q4Order[0], q4Order[1], 50);
+  q4Pair(bottomRow, q4Order[2], q4Order[3], 52);
 
-  const todayCol = topRow.addStack();
+  const todayCol = q4Slots.today;
   todayCol.layoutVertically();
   // Columns do not share a row's width on their own. Each of the four boxes gets the same fixed width.
   todayCol.size = new Size(133, 0);
@@ -2430,13 +2542,7 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
 
   todayCol.centerAlignContent();
 
-  topRow.addSpacer(14);
-  const topVDivider = topRow.addStack();
-  topVDivider.size = new Size(1, 50);
-  topVDivider.backgroundColor = new Color("#333336");
-  topRow.addSpacer(14);
-
-  const trendCol = topRow.addStack();
+  const trendCol = q4Slots.trend;
   trendCol.layoutVertically();
   trendCol.size = new Size(133, 0);
 
@@ -2491,14 +2597,7 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   trendCol.centerAlignContent();
   topRow.centerAlignContent();
 
-  body.addSpacer(2);
-  addDivider(body);
-  body.addSpacer(3);
-
-  const bottomRow = body.addStack();
-  bottomRow.layoutHorizontally();
-
-  const bankCol = bottomRow.addStack();
+  const bankCol = q4Slots.bank;
   bankCol.layoutVertically();
   bankCol.size = new Size(133, 0);
 
@@ -2594,13 +2693,7 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
 
   bankCol.centerAlignContent();
 
-  bottomRow.addSpacer(14);
-  const bottomVDivider = bottomRow.addStack();
-  bottomVDivider.size = new Size(1, 52);
-  bottomVDivider.backgroundColor = new Color("#333336");
-  bottomRow.addSpacer(14);
-
-  const lifeCol = bottomRow.addStack();
+  const lifeCol = q4Slots.life;
   lifeCol.layoutVertically();
   lifeCol.size = new Size(133, 0);
 
@@ -2622,10 +2715,29 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   lifeHead.bottomAlignContent();
   // Same as the bank label row beside it, so the two headings line up.
   if (bankChart) lifeHead.centerAlignContent();
-  const lifeLbl = lifeHead.addText(arrayHeading);
-  lifeLbl.font = Font.systemFont(9);
-  lifeLbl.textColor = peakIsNeutral ? GREY : peakStatusDisplayColor;
-  lifeLbl.lineLimit = 1;
+  // "Status: [word] [today's kWh]". No word on a normal day ("Status: 101 kWh"); "Winter" in winter-sun months;
+  // "Dirty" for Dirty and Very Dirty (orange or red shows how bad); "Service Required" stands alone with no figure.
+  // Today's kWh is green or orange against production up to this time yesterday (green until yesterday's totals are saved, TODAY_NEUTRAL),
+  // and takes the status colour on Dirty days so the whole line is one colour. The longest line is 24 characters, which fits.
+  const q4Winter = !serviceReqActive && pd.status.word === "Winter Sun";
+  const q4Normal = !serviceReqActive && (pd.status.word === "Clean" || pd.status.word === "--");
+  const q4Fault = !serviceReqActive && !q4Winter && !q4Normal;
+  const q4TodayText = prodSinceMidnightWh === null ? "--"
+    : (Math.round(prodSinceMidnightWh / 100) / 10 >= 100 ? String(Math.round(prodSinceMidnightWh / 1000)) : (prodSinceMidnightWh / 1000).toFixed(1));
+  const q4VsY = todayVsYesterday(rd, hd, Date.now());
+  const q4TodayColor = (q4VsY && prodSinceMidnightWh !== null) ? (prodSinceMidnightWh >= q4VsY.prodWh ? GREEN : ORANGE) : TODAY_NEUTRAL;
+  const q4Head = lifeHead.addText("Status:");
+  q4Head.font = Font.systemFont(9); q4Head.textColor = GREY; q4Head.lineLimit = 1;
+  lifeHead.addSpacer(3);
+  if (!q4Normal) {
+    const q4Word = lifeHead.addText(serviceReqActive ? "Service Required" : q4Winter ? "Winter" : "Dirty");
+    q4Word.font = Font.systemFont(9); q4Word.textColor = (serviceReqActive || q4Fault) ? peakStatusDisplayColor : GREY; q4Word.lineLimit = 1;
+  }
+  if (!serviceReqActive) {
+    if (!q4Normal) lifeHead.addSpacer(3);
+    const q4Fig = lifeHead.addText(q4TodayText + " kWh");
+    q4Fig.font = Font.systemFont(9); q4Fig.textColor = q4Fault ? peakStatusDisplayColor : q4TodayColor; q4Fig.lineLimit = 1;
+  }
   if (SHOW_LATEST_KW && currentProdKw !== null && currentProdKw > 0.05) {
     lifeHead.addSpacer();
     const lifeNow = lifeHead.addText("Latest " + currentProdKw.toFixed(1) + " kW");
@@ -2668,10 +2780,11 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
   const peakCol = histRow.addStack();
   peakCol.layoutVertically();
   // Set like the bank number: the same font, with its unit line under it.
+  // The big number is the highest power seen (Max kW), always green: the heading line carries the status colour.
   const peakNumText = pd.observedPeakKw !== null ? pd.observedPeakKw.toFixed(1) : "--";
   const peakVal = peakCol.addText(peakNumText);
   peakVal.font = Font.boldSystemFont(peakNumText.length <= 4 ? 22 : 20);
-  peakVal.textColor = peakStatusDisplayColor;
+  peakVal.textColor = GREEN;
   peakVal.lineLimit = 1;
   const peakLbl = peakCol.addText("Max kW");
   peakLbl.font = Font.systemFont(9);
@@ -2691,14 +2804,13 @@ async function createWidget(rollingResult, historyResult, peakStats, weatherIcon
       { smooth: true, fill: true, skipZero: true, ticks: [midnightIndex], dimBefore: midnightIndex, dimAlpha: YESTERDAY_FADE });
     const histWidget = histRow.addImage(histImg);
     histWidget.imageSize = new Size(histWidth, histHeight);
-  } else if (latestKw !== null && maxKwToday !== null) {
-    const microBarWidth = 58;
-    const microBarHeight = 4;
-    const microBarFillRatio = maxKwToday / ARRAY_OBSERVED_MAX_KW;
-    const microBarNeedleRatio = latestKw / ARRAY_OBSERVED_MAX_KW;
-    const microBarImg = renderMicroPowerBar(microBarFillRatio, microBarNeedleRatio, microBarWidth, microBarHeight);
-    const microBarWidget = histRow.addImage(microBarImg);
-    microBarWidget.imageSize = new Size(microBarWidth, microBarHeight);
+  } else {
+    // No daily curve data: an EMPTY mini graph (frame and top line only), same size as the real one.
+    const emptyW = 58;
+    const emptyH = 24;
+    const emptyImg = renderMicroLineChart(new Array(HOURLY_BUCKET_COUNT).fill(0), 1, emptyW, emptyH, null, { smooth: true, fill: true, skipZero: true });
+    const emptyWidget = histRow.addImage(emptyImg);
+    emptyWidget.imageSize = new Size(emptyW, emptyH);
   }
 
   lifeCol.centerAlignContent();
@@ -2988,7 +3100,6 @@ async function createSmallWidget(rollingResult, historyResult, peakStats, weathe
   }
   return w;
 }
-
 
 // ===== SANDBOX =====
 // Everything above this line is the widget. Everything below is made up.
